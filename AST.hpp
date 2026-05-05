@@ -21,7 +21,14 @@ enum class MathFunc {
     sec,
     csc,
     log,
-    ln
+    ln,
+    arcsin,
+    arccos,
+    arctan,
+    arccot,
+    arcsec,
+    arccsc,
+    abs
 };
 
 // 儲存 Token 的結構

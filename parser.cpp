@@ -47,6 +47,14 @@ vector<Token> tokenize(const string& input)
                 {"sec", MathFunc::sec},
                 {"csc", MathFunc::csc},
                 {"ln",  MathFunc::ln},
+                {"log",  MathFunc::log},
+                {"arcsin",  MathFunc::arcsin},
+                {"arccos",  MathFunc::arccos},
+                {"arctan",  MathFunc::arctan},
+                {"arccot",  MathFunc::arccot},
+                {"arcsec",  MathFunc::arcsec},
+                {"arccsc",  MathFunc::arccsc},
+                {"abs",  MathFunc::abs},
             };
 
             static const std::unordered_map<string, double> constMap = {
@@ -97,7 +105,7 @@ int getPrecedence(string op)
     if(op == "+" || op == "-") return 1;
     if(op == "*" || op == "/") return 2;
     if(op == "^") return 3;
-    else return 0;
+    else return 100;
 }
 
 vector<Token> infixToPostfix(const vector<Token>& tokens)
@@ -212,4 +220,82 @@ ASTNode* buildAST(const vector<Token>& postfix)
     
     // 迴圈結束後，Stack 剩下的唯一一個元素就是整棵樹的 Root
     return st.top(); 
+}
+
+string treeToString(ASTNode* node) {
+    if (node == nullptr) return "";
+
+    // 情況 A：如果是數字或變數，直接回傳
+    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable) {
+        return node->token.value;
+    }
+
+    // 情況 B：如果是函數 (例如 sin, ln)，強制加上括號包住後面的東西
+    if (node->token.type == TokenType::Function) {
+        if (node->token.value == "abs") {
+            return "|" + treeToString(node->right) + "|"; // 單直線包夾
+        }
+        return node->token.value + "(" + treeToString(node->right) + ")";
+    }
+
+    // 情況 C：如果是運算符號 (+, -, *, /)
+    if (node->token.type == TokenType::Operator) {
+        // 🌟 1. 終極化簡攔截： 0.5 * u^-0.5  ➔  1 / (2 * √(u))
+        if (node->token.value == "*") {
+            // 條件 A：左邊是數字 0.5
+            bool leftIsHalf = (node->left && node->left->token.type == TokenType::Number && node->left->token.value == "0.5");
+            
+            // 條件 B：右邊是 ^ -0.5
+            bool rightIsNegHalfPower = (node->right && node->right->token.value == "^" && 
+                                        node->right->right && node->right->right->token.type == TokenType::Number && 
+                                        node->right->right->token.value == "-0.5");
+
+            if (leftIsHalf && rightIsNegHalfPower) {
+                // 完美捕捉！將底數 (也就是右邊節點的左子樹) 抓出來
+                string baseStr = treeToString(node->right->left);
+                // 直接回傳教科書等級的排版！
+                return "1 / (2 * √(" + baseStr + "))"; 
+            }
+        }
+
+        // 🌟 2. 保留原本的次方攔截 (以防它單獨出現，沒有被乘以 0.5)
+        if (node->token.value == "^") {
+            if (node->right && node->right->token.type == TokenType::Number) {
+                // 攔截正根號： x ^ 0.5  ➔  √(x)
+                if (node->right->token.value == "0.5") {
+                    return "√(" + treeToString(node->left) + ")";
+                }
+                // 攔截負根號： x ^ -0.5  ➔  (1 / √(x))
+                if (node->right->token.value == "-0.5") {
+                    return "(1 / √(" + treeToString(node->left) + "))"; 
+                }
+            }
+        }
+
+        string leftStr = treeToString(node->left);
+        string rightStr = treeToString(node->right);
+
+        // 🌟 檢查左子節點
+        if (node->left && node->left->token.type == TokenType::Operator) {
+            // 左邊加括號：左邊優先級較低，或者是「父節點是乘法，左邊是除法」
+            if (getPrecedence(node->left->token.value) < getPrecedence(node->token.value) || 
+               (node->token.value == "*" && node->left->token.value == "/")) {
+                leftStr = "(" + leftStr + ")";
+            }
+        }
+
+        // 🌟 檢查右子節點
+        if (node->right && node->right->token.type == TokenType::Operator) {
+            // 右邊加括號：右邊優先級較低，或者是同級的減法/除法，或者是「父節點是乘法，右邊是除法」
+            if (getPrecedence(node->right->token.value) < getPrecedence(node->token.value) || 
+               (node->token.value == "-" || node->token.value == "/") ||
+               (node->token.value == "*" && node->right->token.value == "/")) {
+                rightStr = "(" + rightStr + ")";
+            }
+        }
+
+        return leftStr + " " + node->token.value + " " + rightStr;
+    }
+
+    return "";
 }
