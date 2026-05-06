@@ -307,28 +307,26 @@ ASTNode* derivative(ASTNode* node)
                 outerDiff -> right = copyTree(node -> right);
                 break;
             }
-            case MathFunc::log: {
-                // log(u)' =  (1 / ln10) * ln(u)
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+           case MathFunc::log: {
+                // log_10(u) 的外部微分 outerDiff = 1 / (u * ln(10))
                 ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
                 ASTNode* one = new ASTNode({TokenType::Number, "1", MathFunc::None});
+                ASTNode* mulDenom = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                 ASTNode* ten = new ASTNode({TokenType::Number, "10", MathFunc::None});
                 ASTNode* ln10Node = new ASTNode({TokenType::Function, "ln", MathFunc::ln});
-                ASTNode* lnNode = new ASTNode({TokenType::Function, "ln", MathFunc::ln});
-
-                lnNode -> right = copyTree(node -> right);
-
-                mulNode -> left = divNode;
-                divNode -> left = one;
-                divNode -> right = ln10Node;
+                
                 ln10Node -> right = ten;
+                mulDenom -> left = copyTree(node -> right); // 這裡的 u 只需要 copy，不用微分
+                mulDenom -> right = ln10Node;
+                
+                divNode -> left = one;
+                divNode -> right = mulDenom;
 
-                mulNode -> right = derivative(lnNode);
-                return mulNode;
+                outerDiff = divNode;
+                break;
             }
-            case MathFunc::arcsin:{
-                //arcsin(u)' = 1/(sqrt(1-u^2))
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arcsin: {
+                // arcsin(u) 的外部微分 outerDiff = (1 - u^2)^-0.5
                 ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* subNode = new ASTNode({TokenType::Operator, "-", MathFunc::None});
@@ -336,8 +334,6 @@ ASTNode* derivative(ASTNode* node)
                 ASTNode* two = new ASTNode({TokenType::Number, "2", MathFunc::None});
                 ASTNode* neg_half_point_five = new ASTNode({TokenType::Number, "-0.5", MathFunc::None});
                 
-                mulNode -> left = powNode_1;
-                mulNode -> right = derivative(node -> right);
                 powNode_1 -> left = subNode;
                 powNode_1 -> right = neg_half_point_five;
                 subNode -> left = one;
@@ -345,32 +341,35 @@ ASTNode* derivative(ASTNode* node)
                 powNode_2 -> left = copyTree(node -> right);
                 powNode_2 -> right = two;
 
-                return mulNode;
+                outerDiff = powNode_1;
+                break;
             }
-            case MathFunc::arccos:{
-                //arccos(u)' = -1/(sqrt(1-u^2))
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arccos: {
+                // arccos(u) 的外部微分 outerDiff = -1 * (1 - u^2)^-0.5 (已修正數學邏輯)
+                ASTNode* mulOuter = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                ASTNode* minus_one = new ASTNode({TokenType::Number, "-1", MathFunc::None});
                 ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* subNode = new ASTNode({TokenType::Operator, "-", MathFunc::None});
-                ASTNode* minus_one = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                ASTNode* one = new ASTNode({TokenType::Number, "1", MathFunc::None});
                 ASTNode* two = new ASTNode({TokenType::Number, "2", MathFunc::None});
                 ASTNode* neg_half_point_five = new ASTNode({TokenType::Number, "-0.5", MathFunc::None});
                 
-                mulNode -> left = powNode_1;
-                mulNode -> right = derivative(node -> right);
                 powNode_1 -> left = subNode;
                 powNode_1 -> right = neg_half_point_five;
-                subNode -> left = minus_one;
+                subNode -> left = one;
                 subNode -> right = powNode_2;
                 powNode_2 -> left = copyTree(node -> right);
                 powNode_2 -> right = two;
 
-                return mulNode;
+                mulOuter -> left = minus_one;
+                mulOuter -> right = powNode_1;
+
+                outerDiff = mulOuter;
+                break;
             }
-            case MathFunc::arctan:{
-                //arctan(u)' = 1/(1+u^2)
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arctan: {
+                // arctan(u) 的外部微分 outerDiff = 1 / (1 + u^2)
                 ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
                 ASTNode* addNode = new ASTNode({TokenType::Operator, "+", MathFunc::None});
@@ -378,8 +377,6 @@ ASTNode* derivative(ASTNode* node)
                 ASTNode* one_2 = new ASTNode({TokenType::Number, "1", MathFunc::None});
                 ASTNode* two = new ASTNode({TokenType::Number, "2", MathFunc::None});
 
-                mulNode -> left = divNode;
-                mulNode -> right = derivative(node -> right);
                 divNode -> left = one_1;
                 divNode -> right = addNode;
                 addNode -> left = one_2;
@@ -387,11 +384,11 @@ ASTNode* derivative(ASTNode* node)
                 powNode -> left = copyTree(node -> right);
                 powNode -> right = two;
 
-                return mulNode;
+                outerDiff = divNode;
+                break;
             }
-            case MathFunc::arccot:{
-                //arccot(u)' = -1/(1+u^2)
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arccot: {
+                // arccot(u) 的外部微分 outerDiff = -1 / (1 + u^2)
                 ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
                 ASTNode* addNode = new ASTNode({TokenType::Operator, "+", MathFunc::None});
@@ -399,8 +396,6 @@ ASTNode* derivative(ASTNode* node)
                 ASTNode* one = new ASTNode({TokenType::Number, "1", MathFunc::None});
                 ASTNode* two = new ASTNode({TokenType::Number, "2", MathFunc::None});
 
-                mulNode -> left = divNode;
-                mulNode -> right = derivative(node -> right);
                 divNode -> left = minus_one;
                 divNode -> right = addNode;
                 addNode -> left = one;
@@ -408,10 +403,11 @@ ASTNode* derivative(ASTNode* node)
                 powNode -> left = copyTree(node -> right);
                 powNode -> right = two;
 
-                return mulNode;
+                outerDiff = divNode;
+                break;
             }
-            case MathFunc::arcsec:{
-                ASTNode* mulNode_1 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arcsec: {
+                // arcsec(u) 的外部微分 outerDiff = 1 / (|u| * (u^2 - 1)^0.5)
                 ASTNode* mulNode_2 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                 ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
@@ -423,8 +419,6 @@ ASTNode* derivative(ASTNode* node)
                 ASTNode* point_five = new ASTNode({TokenType::Number, "0.5", MathFunc::None});
                 ASTNode* absNode = new ASTNode({TokenType::Function, "abs", MathFunc::abs});
 
-                mulNode_1 -> left = divNode;
-                mulNode_1 -> right = derivative(node -> right);
                 divNode -> left = one_1;
                 divNode -> right = mulNode_2;
                 mulNode_2 -> left = absNode;
@@ -437,10 +431,11 @@ ASTNode* derivative(ASTNode* node)
                 powNode_2 -> left = copyTree(node -> right);
                 powNode_2 -> right = two;
 
-                return mulNode_1;
+                outerDiff = divNode;
+                break;
             }
-            case MathFunc::arccsc:{
-                ASTNode* mulNode_1 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            case MathFunc::arccsc: {
+                // arccsc(u) 的外部微分 outerDiff = -1 / (|u| * (u^2 - 1)^0.5)
                 ASTNode* mulNode_2 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                 ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
@@ -452,21 +447,20 @@ ASTNode* derivative(ASTNode* node)
                 ASTNode* point_five = new ASTNode({TokenType::Number, "0.5", MathFunc::None});
                 ASTNode* absNode = new ASTNode({TokenType::Function, "abs", MathFunc::abs});
 
-                mulNode_1 -> left = divNode;
-                mulNode_1 -> right = derivative(node -> right);
                 divNode -> left = minus_one;
                 divNode -> right = mulNode_2;
                 mulNode_2 -> left = absNode;
                 mulNode_2 -> right = powNode_1;
-                absNode -> right = copyTree(node -> right);
+                absNode -> right = copyTree(node->right);
                 powNode_1 -> left = subNode;
                 powNode_1 -> right = point_five;
                 subNode -> left = powNode_2;
                 subNode -> right = one;
-                powNode_2 -> left = copyTree(node -> right);
+                powNode_2 -> left = copyTree(node->right);
                 powNode_2 -> right = two;
 
-                return mulNode_1;
+                outerDiff = divNode;
+                break;
             }
             default:
                 break; // 如果未來有其他函數可以繼續擴充

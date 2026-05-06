@@ -1,4 +1,7 @@
 #include "parser.hpp"
+#include "utils.hpp"
+#include <functional>
+#include <vector>
 
 bool needsImplicitMultiplication(TokenType prevType)
 {
@@ -292,6 +295,83 @@ string treeToString(ASTNode* node) {
                (node->token.value == "*" && node->right->token.value == "/")) {
                 rightStr = "(" + rightStr + ")";
             }
+        }
+
+        if (node->token.value == "*") {
+            double coeff = 1.0;
+            vector<string> vars;
+            vector<string> funcs;
+
+            // 定義一個遞迴收集器 (Lambda 函數)
+            function<void(ASTNode*)> collectFactors = [&](ASTNode* n) {
+                if (!n) return;
+                
+                // 1. 遇到數字：全部乘進 coeff (自動解決 -1 * ... * 2 變成 -2)
+                if (n->token.type == TokenType::Number) {
+                    coeff *= stod(n->token.value);
+                    return;
+                }
+                // 2. 遇到變數：收集到 vars 陣列
+                if (n->token.type == TokenType::Variable) {
+                    vars.push_back(n->token.value);
+                    return;
+                }
+                // 3. 遇到連續的乘法：繼續往下扒開
+                if (n->token.type == TokenType::Operator && n->token.value == "*") {
+                    collectFactors(n->left);
+                    collectFactors(n->right);
+                    return;
+                }
+                
+                // 4. 遇到其他複雜結構 (+, -, /, ^, sin等)：轉成字串當作一個獨立群組
+                string termStr = treeToString(n);
+                
+                // 防禦性括號：如果這是一個加減除法群組，因為它原本在乘法底下，必須強制加括號
+                if (n->token.type == TokenType::Operator && 
+                   (n->token.value == "+" || n->token.value == "-" || n->token.value == "/")) {
+                    termStr = "(" + termStr + ")";
+                }
+                funcs.push_back(termStr);
+            };
+
+            // 啟動收集魔法！
+            collectFactors(node);
+
+            // 如果整個乘法串中有任何 0，直接霸氣回傳 0
+            if (coeff == 0) return "0";
+
+            string result = "";
+            bool hasOtherTerms = !vars.empty() || !funcs.empty();
+
+            // 🌟 開始組裝完美的數學式： [常數] [變數] [函數]
+
+            // 步驟一：組合數字 (如果是 1 或 -1 且後面還有東西，省略 1 的顯示)
+            if (coeff == -1 && hasOtherTerms) {
+                result += "-";
+            } else if (coeff != 1 || !hasOtherTerms) {
+                // 這裡使用你在 derivative 寫過的 formatDouble 來去除多餘的 0
+                result += formatDouble(coeff); 
+            }
+
+            // 步驟二：組合變數 (例如 x 放在數字後面變成 -2x)
+            for (const string& v : vars) {
+                result += v;
+            }
+
+            // 步驟三：組合函數與括號群組 (例如 cos(x))
+           for (size_t i = 0; i < funcs.size(); ++i) {
+                if (i > 0) {
+                    // ✨ 你的神來一筆：函數與函數之間，加上乘號！
+                    result += " * "; 
+                } else if (!result.empty()) {
+                    // 常數/變數與「第一個」函數之間 (例如 -2x 與 cos)
+                    // 保留半形空白就好，這樣會印出 -2x cos(...)
+                    result += " "; 
+                }
+                result += funcs[i];
+            }
+
+            return result;
         }
 
         return leftStr + " " + node->token.value + " " + rightStr;
