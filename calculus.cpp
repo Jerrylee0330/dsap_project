@@ -57,6 +57,20 @@ bool isConstant(ASTNode* node) {
     return isConstant(node->left) && isConstant(node->right);
 }
 
+bool hasVariableX(ASTNode* node) {
+    // 1. 走到盡頭了，沒找到
+    if (node == nullptr) return false; 
+
+    // 2. 檢查自己 (中)：我是不是變數 x？
+    if (node->token.type == TokenType::Variable && node->token.value == "x") {
+        return true; 
+    }
+
+    // 3. 自己不是，那就去問左邊的小孩 (左) 和右邊的小孩 (右)
+    // 只要有一邊回報 true，整棵樹就代表有 x！
+    return hasVariableX(node->left) || hasVariableX(node->right);
+}
+
 bool isSameTree(ASTNode* a, ASTNode* b) {
     if (!a && !b) return true;
     if (!a || !b) return false;
@@ -81,6 +95,12 @@ ASTNode* derivative(ASTNode* node)
     if (node->token.type == TokenType::Number) 
     {
         return new ASTNode({TokenType::Number, "0"});
+    }
+
+    
+    if (node->token.type == TokenType::Constant) 
+    {
+        return new ASTNode({TokenType::Number, "0", MathFunc::None});
     }
 
     //處理變數微分
@@ -608,6 +628,14 @@ ASTNode* tableIntegral(ASTNode* node)
 {
     if(!node) return nullptr;
 
+    if (node->token.type == TokenType::Constant) {
+    // ∫ e dx = e * x
+    ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+    mulNode->left = copyTree(node); // 複製那個 "e"
+    mulNode->right = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+    return mulNode;
+    }
+
     if (node->token.type == TokenType::Variable && node->token.value == "x") 
     {
         ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
@@ -626,6 +654,11 @@ ASTNode* tableIntegral(ASTNode* node)
 
     if (node->token.type == TokenType::Operator && node->token.value == "^")
     {
+        if (node->left->token.type == TokenType::Constant && node->left->token.value == "e" &&
+        node->right->token.type == TokenType::Variable && node->right->token.value == "x") {
+            return copyTree(node); 
+        }
+
         if(node -> left && node -> left -> token.type == TokenType::Variable && node -> right && node -> right->token.type == TokenType::Number)
         {
             if(node -> right -> token.value == "-1")
@@ -1090,7 +1123,7 @@ ASTNode* tableIntegral(ASTNode* node)
                 return subNode_one;
             }
             case MathFunc::arccsc:{
-                ASTNode* plusNode_one = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+                ASTNode* plusNode_one = new ASTNode({TokenType::Operator, "+", MathFunc::None});
                 ASTNode* subNode_two = new ASTNode({TokenType::Operator, "-", MathFunc::None});
                 ASTNode* powNode_one = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 ASTNode* powNode_two = new ASTNode({TokenType::Operator, "^", MathFunc::None});
@@ -1174,6 +1207,215 @@ int getPriority(ASTNode* node) {
     return 0;
 }
 
+struct ExpTrigMatch {
+    // --- 掃描過程追蹤用 ---
+    bool hasExp = false;    // 找到 e 的指數了嗎？
+    bool hasTrig = false;   // 找到三角函數了嗎？
+
+    // --- 最終結果回報用 ---
+    bool isMatched = false; // (如果 hasExp 和 hasTrig 都為 true，這個才會變 true)
+    double a = 1.0;         // e^(ax) 的 a，預設為 1
+    double b = 1.0;         // sin(bx)/cos(bx) 的 b，預設為 1
+    bool isSin = true;      // true 代表抓到 sin，false 代表抓到 cos
+};
+
+// 專門用來從 "3*x" 或 "x" 中挖出數字 3 的幫手
+double extractCoefficient(ASTNode* node) {
+    if (node == nullptr) return 1.0; // 防呆，預設為 1
+
+    // 狀況 1: 只有 "x" (例如 e^x) -> 係數是 1
+    if (node->token.type == TokenType::Variable && node->token.value == "x") {
+        return 1.0;
+    }
+
+    // 狀況 2: 發現乘法 "*" (例如 3*x 或 x*3)
+    if (node->token.type == TokenType::Operator && node->token.value == "*") {
+        
+        // 檢查左邊是不是數字，右邊是不是 x
+        if (node->left && node->left->token.type == TokenType::Number &&
+            node->right && node->right->token.value == "x") {
+            return std::stod(node->left->token.value); // stod: String TO Double
+        }
+        
+        // 檢查右邊是不是數字，左邊是不是 x
+        if (node->right && node->right->token.type == TokenType::Number &&
+            node->left && node->left->token.value == "x") {
+            return std::stod(node->right->token.value);
+        }
+    }
+    
+    // 如果長得太複雜（例如 x^2），我們這裡先預設回傳 1 
+    // (未來可以擴充更強大的代數化簡)
+    return 1.0; 
+}
+
+void scanForExpAndTrig(ASTNode* node, ExpTrigMatch& matchResult) {
+    if (node == nullptr) return;
+
+    // --- 檢查自己 ---
+    // 發現 e^...
+    if (node->token.value == "^" && node->left && node->left->token.value == "e") {
+        matchResult.hasExp = true; 
+        // 🌟 把指數部分 (node->right) 丟給幫手去挖 a！
+        matchResult.a = extractCoefficient(node->right); 
+    }
+    // 發現 sin(...)
+    else if (node->token.type == TokenType::Function && node->token.funcType == MathFunc::sin) {
+        matchResult.hasTrig = true;
+        matchResult.isSin = true;
+        // 🌟 把括號裡的東西 (node->right) 丟給幫手去挖 b！
+        matchResult.b = extractCoefficient(node->right); 
+    }
+    // 發現 cos(...)
+    else if (node->token.type == TokenType::Function && node->token.funcType == MathFunc::cos) {
+        matchResult.hasTrig = true;
+        matchResult.isSin = false;
+        // 🌟 一樣丟給幫手去挖 b！
+        matchResult.b = extractCoefficient(node->right); 
+    }
+
+    // --- 繼續遞迴搜查 ---
+    scanForExpAndTrig(node->left, matchResult);
+    scanForExpAndTrig(node->right, matchResult);
+}
+
+ExpTrigMatch matchExpTrigPattern(ASTNode* node) {
+    ExpTrigMatch result;
+    if (node == nullptr || node->token.value != "*") return result;
+    
+    scanForExpAndTrig(node, result);
+
+    // 結算：如果 e 和 三角函數 都找到了，就判定為「符合特徵」！
+    if (result.hasExp && result.hasTrig) {
+        result.isMatched = true;
+    }
+
+    return result;
+}
+
+ASTNode* buildExpTrigResult(ExpTrigMatch match) 
+{
+    if(match.isSin)
+    {
+        ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+        ASTNode* mulNode_1 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_2 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_3 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_4 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_5 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_6 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* plusNode_1 = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+        ASTNode* subNode = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+        ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* powNode_3 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* sinNode = new ASTNode({TokenType::Function, "sin", MathFunc::sin});
+        ASTNode* cosNode = new ASTNode({TokenType::Function, "cos", MathFunc::cos});
+        ASTNode* eNode = new ASTNode({TokenType::Constant, "e", MathFunc::None});
+        ASTNode* aNode_1 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* aNode_2 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* aNode_3 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* bNode_1 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_2 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_3 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_4 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* twoNode_1 = new ASTNode({TokenType::Number, "2" , MathFunc::None});
+        ASTNode* twoNode_2 = new ASTNode({TokenType::Number, "2" , MathFunc::None});
+        ASTNode* xNode_1 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+        ASTNode* xNode_2 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+        ASTNode* xNode_3 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+
+        divNode -> left = mulNode_1;
+        divNode -> right = plusNode_1;
+        mulNode_1 -> left = powNode_1;
+        mulNode_1 -> right = subNode;
+        powNode_1 -> left = eNode;
+        powNode_1 -> right = mulNode_2;
+        mulNode_2 -> left = aNode_1;
+        mulNode_2 -> right = xNode_1;
+        subNode -> left = mulNode_3;
+        subNode -> right = mulNode_4;
+        mulNode_3 -> left = aNode_2;
+        mulNode_3 -> right = sinNode;
+        sinNode -> right = mulNode_5;
+        mulNode_5 -> left = bNode_1;
+        mulNode_5 -> right = xNode_2;
+        mulNode_4 -> left = bNode_2;
+        mulNode_4 -> right = cosNode;
+        cosNode -> right = mulNode_6;
+        mulNode_6 -> left = bNode_3;
+        mulNode_6 -> right = xNode_3;
+        plusNode_1 -> left = powNode_2;
+        plusNode_1 -> right = powNode_3;
+        powNode_2 -> left = aNode_3;
+        powNode_2 -> right = twoNode_1;
+        powNode_3 -> left = bNode_4;
+        powNode_3 -> right = twoNode_2;
+
+        return divNode;
+    }
+
+    else
+    {
+        ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+        ASTNode* mulNode_1 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_2 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_3 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_4 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_5 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* mulNode_6 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        ASTNode* plusNode_1 = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+        ASTNode* plusNode_2 = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+        ASTNode* powNode_1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* powNode_2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* powNode_3 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        ASTNode* sinNode = new ASTNode({TokenType::Function, "sin", MathFunc::sin});
+        ASTNode* cosNode = new ASTNode({TokenType::Function, "cos", MathFunc::cos});
+        ASTNode* eNode = new ASTNode({TokenType::Constant, "e", MathFunc::None});
+        ASTNode* aNode_1 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* aNode_2 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* aNode_3 = new ASTNode({TokenType::Number, formatDouble(match.a) , MathFunc::None});
+        ASTNode* bNode_1 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_2 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_3 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* bNode_4 = new ASTNode({TokenType::Number, formatDouble(match.b) , MathFunc::None});
+        ASTNode* twoNode_1 = new ASTNode({TokenType::Number, "2" , MathFunc::None});
+        ASTNode* twoNode_2 = new ASTNode({TokenType::Number, "2" , MathFunc::None});
+        ASTNode* xNode_1 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+        ASTNode* xNode_2 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+        ASTNode* xNode_3 = new ASTNode({TokenType::Variable, "x" , MathFunc::None});
+
+        divNode -> left = mulNode_1;
+        divNode -> right = plusNode_1;
+        mulNode_1 -> left = powNode_1;
+        mulNode_1 -> right = plusNode_2;
+        powNode_1 -> left = eNode;
+        powNode_1 -> right = mulNode_2;
+        mulNode_2 -> left = aNode_1;
+        mulNode_2 -> right = xNode_1;
+        plusNode_2 -> left = mulNode_3;
+        plusNode_2 -> right = mulNode_4;
+        mulNode_3 -> left = aNode_2;
+        mulNode_3 -> right = cosNode;
+        cosNode -> right = mulNode_5;
+        mulNode_5 -> left = bNode_1;
+        mulNode_5 -> right = xNode_2;
+        mulNode_4 -> left = bNode_2;
+        mulNode_4 -> right = sinNode;
+        sinNode -> right = mulNode_6;
+        mulNode_6 -> left = bNode_3;
+        mulNode_6 -> right = xNode_3;
+        plusNode_1 -> left = powNode_2;
+        plusNode_1 -> right = powNode_3;
+        powNode_2 -> left = aNode_3;
+        powNode_2 -> right = twoNode_1;
+        powNode_3 -> left = bNode_4;
+        powNode_3 -> right = twoNode_2;
+
+        return divNode;
+    }
+}
+
 ASTNode* integrationByParts(ASTNode* node,int depth) 
 {
     if (depth > 3) return nullptr;
@@ -1232,6 +1474,14 @@ ASTNode* integrate(ASTNode* node, int depth)
         mulNode->left = copyTree(node); // 把整個常數樹 (例如 log(30)) 放在左邊
         mulNode->right = xNode;         // 右邊乘上 x
         return mulNode;
+    }
+
+    if (node->token.type == TokenType::Operator && node->token.value == "*") {
+        
+        ExpTrigMatch match = matchExpTrigPattern(node);
+        if (match.isMatched) {
+            return buildExpTrigResult(match); 
+        }
     }
 
     ASTNode* result = nullptr;

@@ -9,7 +9,8 @@ enum class TokenType {
     Operator,   // 運算子 (例如 +, -, *, /)
     LeftParen,  // 左括號 (
     RightParen,  // 右括號 )
-    Function    // 函數
+    Function,    // 函數
+    Constant
 };
 
 enum class MathFunc {

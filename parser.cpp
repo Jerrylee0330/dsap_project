@@ -7,6 +7,7 @@ bool needsImplicitMultiplication(TokenType prevType)
 {
     return (prevType == TokenType::Number || 
             prevType == TokenType::Variable || 
+            prevType == TokenType::Constant ||
             prevType == TokenType::RightParen);
 }
 
@@ -41,25 +42,18 @@ vector<Token> tokenize(const string& input)
                 tokens.push_back({TokenType::Operator, "*", MathFunc::None});
             }
 
-            // 3. 建立靜態hash table (只會在程式啟動時初始化一次，極度節省資源)
+            // 3. 建立靜態hash table
             static const std::unordered_map<string, MathFunc> funcMap = {
-                {"sin", MathFunc::sin},
-                {"cos", MathFunc::cos},
-                {"tan", MathFunc::tan},
-                {"cot", MathFunc::cot},
-                {"sec", MathFunc::sec},
-                {"csc", MathFunc::csc},
-                {"ln",  MathFunc::ln},
-                {"log",  MathFunc::log},
-                {"arcsin",  MathFunc::arcsin},
-                {"arccos",  MathFunc::arccos},
-                {"arctan",  MathFunc::arctan},
-                {"arccot",  MathFunc::arccot},
-                {"arcsec",  MathFunc::arcsec},
-                {"arccsc",  MathFunc::arccsc},
+                {"sin", MathFunc::sin}, {"cos", MathFunc::cos}, {"tan", MathFunc::tan},
+                {"cot", MathFunc::cot}, {"sec", MathFunc::sec}, {"csc", MathFunc::csc},
+                {"ln",  MathFunc::ln},  {"log",  MathFunc::log},
+                {"arcsin",  MathFunc::arcsin}, {"arccos",  MathFunc::arccos},
+                {"arctan",  MathFunc::arctan}, {"arccot",  MathFunc::arccot},
+                {"arcsec",  MathFunc::arcsec}, {"arccsc",  MathFunc::arccsc},
                 {"abs",  MathFunc::abs},
             };
 
+            // 雖然我們暫時不用到 double，但保留這個 map 以後要做 evaluate() 數值計算時非常方便！
             static const std::unordered_map<string, double> constMap = {
                 {"pi", 3.14159265358979323846},
                 {"e",  2.71828182845904523536}
@@ -75,8 +69,11 @@ vector<Token> tokenize(const string& input)
                 // 如果不是函數，再查查看是不是常數？
                 auto itConst = constMap.find(name);
                 if (itConst != constMap.end()) {
-                    // 命中常數字典！(例如 pi) 👉 直接把它偽裝成 Number 存進去
-                    tokens.push_back({TokenType::Number, to_string(itConst->second), MathFunc::None});
+                    // ==========================================
+                    // 🌟 核心修正點：命中常數字典！
+                    // 不要再把它轉換成小數了，直接賦予 Constant 身分，並保留原本的字母 (name)！
+                    // ==========================================
+                    tokens.push_back({TokenType::Constant, name, MathFunc::None});
                 } 
                 else {
                     // 都不是！那它就是個普通的變數 (例如 x, y)
@@ -85,7 +82,6 @@ vector<Token> tokenize(const string& input)
             }
         }
         
-
         if(isdigit(c))
         {
             string numStr = "";
@@ -97,7 +93,7 @@ vector<Token> tokenize(const string& input)
 
             tokens.push_back({TokenType::Number, numStr});
             i--; 
-        }//數字以遍歷形式處理，用while讀到該字元不是數字/小數點為止
+        }
     }
     
     return tokens;
@@ -120,7 +116,7 @@ vector<Token> infixToPostfix(const vector<Token>& tokens)
         Token t = tokens[i];
         
         // 1. 數字和變數直接輸出
-        if (t.type == TokenType::Number || t.type == TokenType::Variable) {
+        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant) {
             output.push_back(t);
         }
 
@@ -184,7 +180,7 @@ ASTNode* buildAST(const vector<Token>& postfix)
     {
         Token t = postfix[i];
 
-        if (t.type == TokenType::Number || t.type == TokenType::Variable) 
+        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant) 
         {
             ASTNode* new_AST= new ASTNode(t);
             st.push(new_AST);
@@ -229,7 +225,7 @@ string treeToString(ASTNode* node) {
     if (node == nullptr) return "";
 
     // 情況 A：如果是數字或變數，直接回傳
-    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable) {
+    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable || node->token.type == TokenType::Constant) {
         return node->token.value;
     }
 
