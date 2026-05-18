@@ -11,3 +11,4 @@ ASTNode* linearityIntegral(ASTNode* node);
 bool isLinearX(ASTNode* node, double& a);
 bool isJustX(ASTNode* node);
 bool isSameTree(ASTNode* a, ASTNode* b);
+void deleteTree(ASTNode* node);

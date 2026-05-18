@@ -11,6 +11,64 @@ bool needsImplicitMultiplication(TokenType prevType)
             prevType == TokenType::RightParen);
 }
 
+// =======================================================
+// 🌟 Token 預處理器 (完美適配 TokenType::LeftParen 版)
+// =======================================================
+vector<Token> preprocessTokens(const vector<Token>& tokens) {
+    vector<Token> result;
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        Token current = tokens[i];
+        result.push_back(current);
+
+        // 如果已經是最後一個 Token，就不需要往後看
+        if (i == tokens.size() - 1) break;
+
+        Token next = tokens[i + 1];
+        bool needsMultiply = false;
+
+        // ==========================================
+        // 🌟 檢查是否需要補上隱含乘法 "*"
+        // ==========================================
+        // 情況 A：數字後面接變數、函數、或「左括號」 (例如 "2x", "2sin", "2(")
+        if (current.type == TokenType::Number && 
+           (next.type == TokenType::Variable || next.type == TokenType::Function || next.type == TokenType::LeftParen)) {
+            needsMultiply = true;
+        }
+        // 情況 B：「右括號」後面接「左括號」、變數、或函數 (例如 "(x+1)(x-1)", "(x)sin(x)")
+        else if (current.type == TokenType::RightParen && 
+                (next.type == TokenType::LeftParen || next.type == TokenType::Variable || next.type == TokenType::Function)) {
+            needsMultiply = true;
+        }
+        // 情況 C：變數後面接變數、函數、或「左括號」 (例如 "x sin(x)", "x(x+1)")
+        else if (current.type == TokenType::Variable && 
+                (next.type == TokenType::Variable || next.type == TokenType::Function || next.type == TokenType::LeftParen)) {
+            needsMultiply = true;
+        }
+
+        // 補上純正的乘法 Token
+        if (needsMultiply) {
+            result.push_back({TokenType::Operator, "*"});
+        }
+
+        // ==========================================
+        // 🌟 處理偷懶的「函數隱含括號」(例如 sin x -> sin(x))
+        // ==========================================
+        // 如果現在是函數，但下一個 Token 不是「左括號」
+        if (current.type == TokenType::Function && next.type != TokenType::LeftParen) {
+            
+            // 直接使用你設計的專屬 Token 類型來生成括號！
+            result.push_back({TokenType::LeftParen, "("});
+            result.push_back(next);
+            result.push_back({TokenType::RightParen, ")"});
+            
+            i++; // 跳過下一個 Token，因為我們已經把它包進括號裡了
+        }
+    }
+
+    return result;
+}
+
 vector<Token> tokenize(const string& input)
 {
     vector<Token> tokens;
