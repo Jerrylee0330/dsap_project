@@ -2,6 +2,7 @@
 #include <vector>
 #include <stack>
 #include <unordered_map>
+#include <functional>
 #include "AST.hpp"
 
 bool needsImplicitMultiplication(TokenType prevType);

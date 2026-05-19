@@ -1,7 +1,8 @@
-#include <vector>
 #include "calculus.hpp"
 #include "utils.hpp"
 #include "parser.hpp"
+#include <map>
+#include <cmath>
 
 // 🌟 幫手 1：多項式雷達 (精準抓出係數與次方)
 // 可以看懂 5, x, 3*x, x^2, 4*x^3, 甚至 2*x*3*x^2 這種怪物！
@@ -2037,6 +2038,298 @@ MathFunc strToMathFunc(const string& name) {
     return MathFunc::None;
 }
 
+// =======================================================
+// 🌟 分數積分工具一：判斷是否為純多項式
+// =======================================================
+bool isPolynomial(ASTNode* node) {
+    if (node == nullptr) return true;
+
+    // 遇到變數或數字，絕對是合法的多項式元素
+    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable) 
+        return true;
+
+    // 嚴格攔截所有特殊函數 (sin, cos, ln, e 等)
+    if (node->token.type == TokenType::Function) 
+        return false;
+
+    if (node->token.type == TokenType::Operator) {
+        string op = node->token.value;
+        
+        // 加減乘都可以接受，繼續往下檢查
+        if (op == "+" || op == "-" || op == "*") {
+            return isPolynomial(node->left) && isPolynomial(node->right);
+        }
+        
+        // 如果是除法 (/)，只有當分母是「純數字」時才算多項式 (例如 x/2)
+        if (op == "/") {
+            if (node->right && node->right->token.type == TokenType::Number) {
+                return isPolynomial(node->left);
+            }
+            return false;
+        }
+
+        // 如果是次方 (^)，次方數必須是「非負整數」 (例如 x^2 可以，x^-1 或 x^0.5 不行)
+        if (op == "^") {
+            if (node->right && node->right->token.type == TokenType::Number) {
+                double power = std::stod(node->right->token.value);
+                if (power >= 0 && std::abs(power - std::round(power)) < 1e-9) {
+                    return isPolynomial(node->left); // 底數也必須是多項式
+                }
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+// =======================================================
+// 🌟 分數積分工具二：將展開後的 AST 轉換為 多項式 Map (次方 -> 係數)
+// 注意：傳入的 node 必須是已經經過 expand() 暴力展開後的算式！
+// =======================================================
+void collectPolyTerms(ASTNode* node, std::map<int, double>& polyMap, double currentSign = 1.0) {
+    if (node == nullptr) return;
+
+    if (node->token.type == TokenType::Operator && (node->token.value == "+" || node->token.value == "-")) {
+        collectPolyTerms(node->left, polyMap, currentSign);
+        
+        // 如果是減號，右邊那整坨的符號都要翻轉
+        double nextSign = (node->token.value == "-") ? -currentSign : currentSign;
+        collectPolyTerms(node->right, polyMap, nextSign);
+        return;
+    }
+
+    // 當走到最底層的單項 (例如 3*x^2 或 x 或是 5)
+    double coeff = 0.0, power = 0.0;
+    
+    // 呼叫你原本寫好的解析單項工具 (parseTerm)
+    if (parseTerm(node, coeff, power)) {
+        int p = std::round(power);
+        polyMap[p] += (coeff * currentSign); // 將係數累加進對應的次方中
+    }
+}
+
+map<int, double> astToPolyMap(ASTNode* node) {
+    map<int, double> polyMap;
+    // 為了安全起見，轉換前先強制對它進行一次暴力展開與化簡
+    ASTNode* expanded = expand(copyTree(node));
+    ASTNode* simplified = simplify(expanded);
+    
+    collectPolyTerms(simplified, polyMap, 1.0);
+    
+    deleteTree(simplified);
+    return polyMap;
+}
+
+// =======================================================
+// 🌟 分數積分工具三：將多項式 Map 重新組裝回 AST 語法樹
+// =======================================================
+ASTNode* polyMapToAST(const std::map<int, double>& polyMap) {
+    if (polyMap.empty()) {
+        return new ASTNode({TokenType::Number, "0", MathFunc::None});
+    }
+
+    ASTNode* resultNode = nullptr;
+
+    // 這裡我們用反向迭代器 (rbegin)，讓組裝出來的樹從最高次方開始 (例如 3x^2 + 2x + 1)
+    for (auto it = polyMap.rbegin(); it != polyMap.rend(); ++it) {
+        int power = it->first;
+        double coeff = it->second;
+
+        // 如果係數是 0，直接跳過這項
+        if (std::abs(coeff) < 1e-9) continue;
+
+        ASTNode* termNode = nullptr;
+
+        // 情況 A：常數項 (power == 0)
+        if (power == 0) {
+            termNode = new ASTNode({TokenType::Number, formatDouble(std::abs(coeff)), MathFunc::None});
+        } 
+        // 情況 B：一次項 (power == 1)
+        else if (power == 1) {
+            ASTNode* varNode = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+            if (std::abs(coeff) == 1.0) {
+                termNode = varNode; // 單純的 x
+            } else {
+                termNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                termNode->left = new ASTNode({TokenType::Number, formatDouble(std::abs(coeff)), MathFunc::None});
+                termNode->right = varNode;
+            }
+        } 
+        // 情況 C：高次項 (power > 1)
+        else {
+            ASTNode* varNode = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+            ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+            powNode->left = varNode;
+            powNode->right = new ASTNode({TokenType::Number, std::to_string(power), MathFunc::None});
+
+            if (std::abs(coeff) == 1.0) {
+                termNode = powNode; // 單純的 x^n
+            } else {
+                termNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                termNode->left = new ASTNode({TokenType::Number, formatDouble(std::abs(coeff)), MathFunc::None});
+                termNode->right = powNode;
+            }
+        }
+
+        // 把這一項跟前面的項用 + 或 - 接起來
+        if (resultNode == nullptr) {
+            if (coeff < 0) {
+                // 如果第一項就是負的 (例如 -3x^2)
+                ASTNode* negNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                negNode->left = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                negNode->right = termNode;
+                resultNode = negNode;
+            } else {
+                resultNode = termNode;
+            }
+        } else {
+            string op = (coeff < 0) ? "-" : "+";
+            ASTNode* comboNode = new ASTNode({TokenType::Operator, op, MathFunc::None});
+            comboNode->left = resultNode;
+            comboNode->right = termNode;
+            resultNode = comboNode;
+        }
+    }
+
+    if (resultNode == nullptr) return new ASTNode({TokenType::Number, "0", MathFunc::None});
+    return resultNode;
+}
+
+// 🌟 輔助工具：清除 Map 中因為浮點數運算產生的微小誤差 (例如 1e-15 的係數)
+void cleanPolyMap(std::map<int, double>& poly) {
+    for (auto it = poly.begin(); it != poly.end(); ) {
+        if (std::abs(it->second) < 1e-9) {
+            it = poly.erase(it); // 係數太小，直接把這項刪掉
+        } else {
+            ++it;
+        }
+    }
+}
+
+double evalPoly(const std::map<int, double>& poly, double x) {
+    double result = 0.0;
+    for (auto const& term : poly) {
+        result += term.second * std::pow(x, term.first);
+    }
+    return result;
+}
+
+
+
+// =======================================================
+// 🌟 分數積分第一戰：多項式長除法 N(x) / D(x) = Q(x) ... R(x)
+// =======================================================
+void polynomialLongDivision(
+    std::map<int, double> N, 
+    std::map<int, double> D, 
+    std::map<int, double>& Q, 
+    std::map<int, double>& R
+) {
+    Q.clear();
+    cleanPolyMap(N);
+    cleanPolyMap(D);
+
+    if (D.empty()) return; // 防呆機制：分母不能為 0
+
+    // 當分子還有東西，且分子的最高次數 >= 分母的最高次數時，繼續除！
+    while (!N.empty()) {
+        int degN = N.rbegin()->first;
+        int degD = D.rbegin()->first;
+
+        if (degN < degD) break; // 無法再除，剩下的就是餘式
+
+        double coeffN = N.rbegin()->second;
+        double coeffD = D.rbegin()->second;
+
+        // 計算這回合的商 (次數相減，係數相除)
+        int degQ = degN - degD;
+        double coeffQ = coeffN / coeffD;
+
+        Q[degQ] = coeffQ; // 將算出的單項加入商式 Q(x) 中
+
+        // N(x) = N(x) - (coeffQ * x^degQ) * D(x)
+        for (auto const& term : D) {
+            int currentDeg = term.first;
+            double currentCoeff = term.second;
+            N[currentDeg + degQ] -= (currentCoeff * coeffQ);
+        }
+        
+        cleanPolyMap(N); // 🌟 關鍵：清除剛才抵銷掉的最高次項及微小誤差
+    }
+    
+    R = N; // 迴圈結束後，剩下的 N 就是餘式 R(x)
+}
+
+bool gaussianElimination(std::vector<std::vector<double>>& augMatrix, std::vector<double>& solution) {
+    int n = augMatrix.size();
+    if (n == 0) return false;
+    int m = augMatrix[0].size();
+    
+    // 1. 前向消去階段 (Forward Elimination)
+    for (int i = 0; i < n; ++i) {
+        // 🔒 局部主元交換 (Partial Pivoting)：尋找第 i 欄中絕對值最大的列
+        int maxRow = i;
+        for (int k = i + 1; k < n; ++k) {
+            if (std::abs(augMatrix[k][i]) > std::abs(augMatrix[maxRow][i])) {
+                maxRow = k;
+            }
+        }
+        
+        // 如果最大主元接近 0，代表此聯立方程式無解或有無限多組解（矩陣奇異）
+        if (std::abs(augMatrix[maxRow][i]) < 1e-9) {
+            return false;
+        }
+        
+        // 交換目前的列與最大主元列
+        if (maxRow != i) {
+            std::swap(augMatrix[i], augMatrix[maxRow]);
+        }
+        
+        // 開始將目前主元下方的所有橫列對應位置消去為 0
+        for (int k = i + 1; k < n; ++k) {
+            double factor = augMatrix[k][i] / augMatrix[i][i];
+            for (int j = i; j < m; ++j) {
+                augMatrix[k][j] -= factor * augMatrix[i][j];
+            }
+        }
+    }
+    
+    // 2. 後向回代階段 (Back Substitution)
+    solution.assign(n, 0.0);
+    for (int i = n - 1; i >= 0; --i) {
+        double sum = 0.0;
+        for (int j = i + 1; j < n; ++j) {
+            sum += augMatrix[i][j] * solution[j];
+        }
+        solution[i] = (augMatrix[i][n] - sum) / augMatrix[i][i];
+        
+        // 精確度校正：如果解出來的數值極度接近整數，自動進行四捨五入
+        if (std::abs(solution[i] - std::round(solution[i])) < 1e-9) {
+            solution[i] = std::round(solution[i]);
+        }
+    }
+    
+    return true;
+}
+
+double findIntegerRoot(const std::map<int, double>& poly) {
+    if (poly.empty()) return NAN;
+    
+    double constantTerm = poly.count(0) ? poly.at(0) : 0.0;
+    if (std::abs(constantTerm) < 1e-9) return 0.0; // 如果沒有常數項，x=0 就是一個根
+
+    int c = std::abs(std::round(constantTerm));
+    
+    // 測試 1 到 c 的所有因數 (包含正負)
+    for (int i = 1; i <= c; ++i) {
+        if (c % i == 0) {
+            if (std::abs(evalPoly(poly, i)) < 1e-9) return i;
+            if (std::abs(evalPoly(poly, -i)) < 1e-9) return -i;
+        }
+    }
+    return NAN; // 找不到整數根
+}
+
 // ===========================================================================
 // 🌟 終極完全體：微積分核心積分引擎 (Integrate Engine)
 // ===========================================================================
@@ -2066,6 +2359,232 @@ ASTNode* integrate(ASTNode* node, int depth)
     if ((result = tableIntegral(node))) return result;
     // 💡 確保 depth 精準傳遞，防止遞迴堆疊溢位！
     if ((result = linearityIntegral(node, depth))) return result; 
+
+    // ==========================================
+    // 【防線 2.5】有理函數 (分數) 專用戰略區
+    // ==========================================
+    if (node->token.type == TokenType::Operator && node->token.value == "/") {
+        // 檢查分子分母是否都是「純多項式」
+        if (isPolynomial(node->left) && isPolynomial(node->right)) {
+            
+            auto numMap = astToPolyMap(node->left);
+            auto denMap = astToPolyMap(node->right);
+            
+            int degN = numMap.empty() ? 0 : numMap.rbegin()->first;
+            int degD = denMap.empty() ? 0 : denMap.rbegin()->first;
+            
+            // ⚔️ 分數戰略 A：多項式長除法 (當分子次數 >= 分母次數)
+            if (degN >= degD && degD > 0) {
+                std::map<int, double> Q, R;
+                polynomialLongDivision(numMap, denMap, Q, R);
+                
+                // 把算出來的商 Q 和 餘數 R 變回 AST 語法樹
+                ASTNode* qNode = polyMapToAST(Q);
+                ASTNode* rNode = polyMapToAST(R);
+                
+                // 組裝新算式： Q(x) + R(x) / D(x)
+                ASTNode* newDiv = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+                newDiv->left = rNode;
+                newDiv->right = copyTree(node->right); // 分母照舊
+                
+                ASTNode* finalRes = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+                finalRes->left = qNode;
+                finalRes->right = newDiv;
+                
+                // 🚀 把降維拆解完的算式，丟回引擎重新積分！
+                ASTNode* result = integrate(finalRes, depth);
+                deleteTree(finalRes);
+                
+                if (result != nullptr) return result;
+            }
+
+            // ⚔️ 分數戰略 B：真分式拆解與轉換 (當分子次數 < 分母次數)
+            else if (degN < degD && degD > 0) {
+                
+                // 🚀 新增技能：部分分式展開 (Partial Fractions) - 針對二次分母
+                if (degD == 2) {
+                    double a_coeff = denMap.count(2) ? denMap[2] : 0.0;
+                    double b_coeff = denMap.count(1) ? denMap[1] : 0.0;
+                    double c_coeff = denMap.count(0) ? denMap[0] : 0.0;
+
+                    // 計算判別式 b^2 - 4ac
+                    double discriminant = b_coeff * b_coeff - 4 * a_coeff * c_coeff;
+
+                    // 如果判別式 > 0，代表分母有兩個相異實根，啟動部分分式！
+                    if (discriminant > 0 && a_coeff != 0.0) {
+                        // 算出兩個根 r1, r2
+                        double r1 = (-b_coeff + sqrt(discriminant)) / (2 * a_coeff);
+                        double r2 = (-b_coeff - sqrt(discriminant)) / (2 * a_coeff);
+
+                        // 使用 Heaviside 掩蓋法算 A 和 B
+                        double num_r1 = evalPoly(numMap, r1);
+                        double num_r2 = evalPoly(numMap, r2);
+
+                        double A = num_r1 / (a_coeff * (r1 - r2));
+                        double B = num_r2 / (a_coeff * (r2 - r1));
+
+                        // 建立 A * (x - r1)^-1
+                        ASTNode* term1 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+                        term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+                        term1->right = new ASTNode({TokenType::Number, formatDouble(r1), MathFunc::None});
+                        ASTNode* pow1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                        pow1->left = term1; pow1->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                        ASTNode* partA = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                        partA->left = new ASTNode({TokenType::Number, formatDouble(A), MathFunc::None});
+                        partA->right = pow1;
+
+                        // 建立 B * (x - r2)^-1
+                        ASTNode* term2 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+                        term2->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+                        term2->right = new ASTNode({TokenType::Number, formatDouble(r2), MathFunc::None});
+                        ASTNode* pow2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                        pow2->left = term2; pow2->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                        ASTNode* partB = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                        partB->left = new ASTNode({TokenType::Number, formatDouble(B), MathFunc::None});
+                        partB->right = pow2;
+
+                        // 把兩半用加號接起來： A/(x-r1) + B/(x-r2)
+                        ASTNode* finalPF = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+                        finalPF->left = partA;
+                        finalPF->right = partB;
+
+                        // 丟回引擎重新積分！
+                        ASTNode* result = integrate(finalPF, depth);
+                        deleteTree(finalPF);
+                        if (result != nullptr) return result;
+                    }
+
+                    // ... 前面的 Heaviside 掩蓋法 (discriminant > 0) ...
+                    
+                    // 🌟 新增技能：無實根的二次分母 (Arctan 終極公式)
+                    // 處理 ∫ K / (ax^2 + bx + c) dx，當 b^2 - 4ac < 0 且分子為常數時
+                    else if (discriminant < 0 && a_coeff != 0.0 && degN == 0) {
+                        
+                        double K = numMap.count(0) ? numMap[0] : 0.0;
+                        double sqrt_neg_delta = std::sqrt(-discriminant);
+
+                        // 計算外面的係數: 2K / √(-Δ)
+                        double outer_coeff = (2.0 * K) / sqrt_neg_delta;
+
+                        // 建立 2ax
+                        ASTNode* two_a_x = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                        two_a_x->left = new ASTNode({TokenType::Number, formatDouble(2.0 * a_coeff), MathFunc::None});
+                        two_a_x->right = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+
+                        // 建立內部加法: 2ax + b
+                        ASTNode* inner_add = nullptr;
+                        if (std::abs(b_coeff) < 1e-9) {
+                            inner_add = two_a_x; // 如果 b 是 0，就只留 2ax
+                        } else {
+                            string op = (b_coeff < 0) ? "-" : "+";
+                            inner_add = new ASTNode({TokenType::Operator, op, MathFunc::None});
+                            inner_add->left = two_a_x;
+                            inner_add->right = new ASTNode({TokenType::Number, formatDouble(std::abs(b_coeff)), MathFunc::None});
+                        }
+
+                        // 建立內部除法: (2ax + b) / √(-Δ)
+                        ASTNode* inner_div = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+                        inner_div->left = inner_add;
+                        inner_div->right = new ASTNode({TokenType::Number, formatDouble(sqrt_neg_delta), MathFunc::None});
+
+                        // 建立 arctan(...) (💡 記得用 strToMathFunc 賦予安全的列舉屬性！)
+                        ASTNode* arctanNode = new ASTNode({TokenType::Function, "arctan", strToMathFunc("arctan")});
+                        arctanNode->right = inner_div;
+
+                        // 乘上外面的係數，大功告成！
+                        ASTNode* finalRes = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                        finalRes->left = new ASTNode({TokenType::Number, formatDouble(outer_coeff), MathFunc::None});
+                        finalRes->right = arctanNode;
+
+                        // 這裡不需要遞迴丟回 integrate，因為我們已經直接算出最終的積分結果了！
+                        return finalRes;
+                    }
+                }
+                // 🚀 終極技能：萬用高次降維剝離 (Degree >= 3)
+                else if (degD >= 3) {
+                    // 1. 尋找一個整數根 r
+                    double r = findIntegerRoot(denMap);
+                    
+                    if (!std::isnan(r)) {
+                        // 2. 建立除式 (x - r)
+                        std::map<int, double> linearFactor;
+                        linearFactor[1] = 1.0;
+                        linearFactor[0] = -r;
+                        
+                        // 3. 長除法拆解分母： D(x) / (x - r) = Q(x)
+                        std::map<int, double> Q_map, remainderD;
+                        polynomialLongDivision(denMap, linearFactor, Q_map, remainderD);
+                        
+                        // 4. 計算常數 A = N(r) / Q(r)
+                        double num_r = evalPoly(numMap, r);
+                        double Q_r = evalPoly(Q_map, r);
+                        
+                        if (std::abs(Q_r) > 1e-9) { // 確保分母不為 0
+                            double A_val = num_r / Q_r;
+                            
+                            // 5. 計算剩下的分子 P(x) = (N(x) - A * Q(x)) / (x - r)
+                            std::map<int, double> N_minus_AQ = numMap;
+                            for (auto const& term : Q_map) {
+                                N_minus_AQ[term.first] -= A_val * term.second;
+                            }
+                            
+                            std::map<int, double> P_map, remainderP;
+                            polynomialLongDivision(N_minus_AQ, linearFactor, P_map, remainderP);
+                            
+                            // ==========================================
+                            // 6. 將解出來的零件組裝成 AST 語法樹
+                            // ==========================================
+                            
+                            // 第一項： A * (x - r)^-1
+                            ASTNode* term1 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+                            term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
+                            term1->right = new ASTNode({TokenType::Number, formatDouble(r), MathFunc::None});
+                            ASTNode* pow1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                            pow1->left = term1; pow1->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                            ASTNode* partA = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                            partA->left = new ASTNode({TokenType::Number, formatDouble(A_val), MathFunc::None});
+                            partA->right = pow1;
+
+                            // 🌟 修正點：第二項 P(x) / Q(x) 必須使用純正的除法 "/" 
+                            // 這樣才能在下一輪遞迴中，精準觸發【防線 2.5】！
+                            ASTNode* P_AST = polyMapToAST(P_map);
+                            ASTNode* Q_AST = polyMapToAST(Q_map);
+                            
+                            ASTNode* partP_Q = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+                            partP_Q->left = P_AST;
+                            partP_Q->right = Q_AST;
+
+                            // 合併 A /(x-r) + P(x)/Q(x)
+                            ASTNode* finalPF = new ASTNode({TokenType::Operator, "+", MathFunc::None});
+                            finalPF->left = partA;
+                            finalPF->right = partP_Q;
+
+                            // 🚀 丟回引擎重新積分！
+                            ASTNode* result = integrate(finalPF, depth);
+                            deleteTree(finalPF);
+                            if (result != nullptr) return result;
+                        }
+                    }
+                }
+
+                // 🛡️ 兜底戰略 (Fallback)：如果分母無法分解、或是次數不對
+                // 退回原本的 A * B^(-1) 戰術，讓 U-Sub 去碰碰運氣
+                ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                powNode->left = copyTree(node->right);
+                powNode->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                
+                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                mulNode->left = copyTree(node->left);
+                mulNode->right = powNode;
+                
+                ASTNode* result = integrate(mulNode, depth);
+                deleteTree(mulNode);
+                
+                if (result != nullptr) return result;
+            }
+
+        }
+    }
 
     // ==========================================
     // 【防線 3】乘法 (*) 與 次方 (^) 專用複合戰略調度中心

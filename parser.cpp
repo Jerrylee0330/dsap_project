@@ -1,7 +1,5 @@
 #include "parser.hpp"
 #include "utils.hpp"
-#include <functional>
-#include <vector>
 
 bool needsImplicitMultiplication(TokenType prevType)
 {
