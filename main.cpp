@@ -72,6 +72,7 @@ int main() {
         
         cout << "[Debug] Step 3: Building AST..." << endl;
         ASTNode* root = buildAST(postfix);
+        root = simplify(root);
 
         if (root == nullptr) {
             cout << "\n❌ Parse failed! AST is null. Please check your syntax." << endl;
@@ -99,6 +100,7 @@ int main() {
         
         cout << "[Debug] 5.3: Integration done! Entering simplify()..." << endl;
         intResult = simplify(intResult);
+        intResult = postProcessFractions(intResult);
         
         if (intResult != nullptr) {
             cout << "[Debug] 5.4: Simplification done! Preparing to print..." << endl;

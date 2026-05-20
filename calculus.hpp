@@ -7,6 +7,8 @@ ASTNode* simplify(ASTNode* node);
 ASTNode* integrate(ASTNode* node, int depth);
 ASTNode* tableIntegral(ASTNode* node);
 ASTNode* linearityIntegral(ASTNode* node);
+ASTNode* postProcessFractions(ASTNode* node);
+ASTNode* doubleToFractionAST(double val);
 
 bool isLinearX(ASTNode* node, double& a);
 bool isJustX(ASTNode* node);

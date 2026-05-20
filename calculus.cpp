@@ -4,6 +4,34 @@
 #include <map>
 #include <cmath>
 
+bool isLinearX(ASTNode* node, double& a) {
+    if (node == nullptr) return false;
+
+    // 情況 1：單純的 x (相當於 1 * x)
+    if (node->token.type == TokenType::Variable && node->token.value == "x") {
+        a = 1.0;
+        return true;
+    }
+
+    // 情況 2：遇到乘法 a * x 或 x * a
+    if (node->token.type == TokenType::Operator && node->token.value == "*") {
+        bool leftIsNum = (node->left && node->left->token.type == TokenType::Number);
+        bool rightIsX = (node->right && node->right->token.type == TokenType::Variable && node->right->token.value == "x");
+        
+        bool rightIsNum = (node->right && node->right->token.type == TokenType::Number);
+        bool leftIsX = (node->left && node->left->token.type == TokenType::Variable && node->left->token.value == "x");
+
+        if (leftIsNum && rightIsX) {
+            a = stod(node->left->token.value);
+            return true;
+        }
+        if (leftIsX && rightIsNum) {
+            a = stod(node->right->token.value);
+            return true;
+        }
+    }
+    return false;
+}
 // 🌟 幫手 1：多項式雷達 (精準抓出係數與次方)
 // 可以看懂 5, x, 3*x, x^2, 4*x^3, 甚至 2*x*3*x^2 這種怪物！
 bool parseTerm(ASTNode* node, double& coeff, double& power) {
@@ -617,12 +645,26 @@ ASTNode* derivative(ASTNode* node)
                 outerDiff = divNode;
                 break;
             }
+            case MathFunc::abs: {
+                ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+                divNode->left = copyTree(node->right); // 分子放 u
+                
+                ASTNode* absNode = new ASTNode({TokenType::Function, "abs", MathFunc::abs});
+                absNode->right = copyTree(node->right); // 分母放 |u|
+                
+                divNode->right = absNode;
+                outerDiff = divNode;
+                break;
+            }
             default:
                 break; // 如果未來有其他函數可以繼續擴充
         }
 
+        if (outerDiff == nullptr) {
+            deleteTree(innerDiff);
+            return nullptr;
+        }
 
-        // 3. 把它們乘起來： f'(g(x)) * g'(x)
         ASTNode* result = new ASTNode({TokenType::Operator, "*", MathFunc::None});
         result->left = outerDiff;
         result->right = innerDiff;
@@ -631,7 +673,6 @@ ASTNode* derivative(ASTNode* node)
     }
 
     return nullptr;
-
 }
 
 bool hasPlusMinus(ASTNode* node) {
@@ -800,16 +841,14 @@ ASTNode* expand(ASTNode* node) {
 ASTNode* integrate(ASTNode* node, int depth = 0);
 
 ASTNode* linearityIntegral(ASTNode* node, int depth) {
-    // 防禦機制：線性法則只處理運算子 (+, -, *)
     if (node == nullptr || node->token.type != TokenType::Operator) {
         return nullptr;
     }
 
-    // 規則 1：處理加法 (+) 與減法 (-)  [這裡的邏輯完全不變]
     if (node->token.value == "+" || node->token.value == "-") {
-        
-        ASTNode* leftIntegral = integrate(node->left, depth);        
-        ASTNode* rightIntegral = integrate(node->right, depth); 
+        // ⚡ 修正： depth + 1
+        ASTNode* leftIntegral = integrate(node->left, depth + 1);        
+        ASTNode* rightIntegral = integrate(node->right, depth + 1); 
 
         if (leftIntegral != nullptr && rightIntegral != nullptr) {
             ASTNode* addSubNode = new ASTNode({TokenType::Operator, node->token.value, MathFunc::None});
@@ -820,77 +859,32 @@ ASTNode* linearityIntegral(ASTNode* node, int depth) {
         return nullptr;
     }
 
-    // 規則 2：處理常數乘法 (*)
     if (node->token.value == "*") {
-        // 直接判定：左邊或右邊是不是一個純數字？
         bool leftIsNumber = (node->left && node->left->token.type == TokenType::Number);
         bool rightIsNumber = (node->right && node->right->token.type == TokenType::Number);
 
-        // 情況 A：左邊是數字 (例如 3 * x^2)
         if (leftIsNumber && !rightIsNumber) {
-            ASTNode* rightIntegral = integrate(node->right,depth); // 只對右邊積分
-            
+            // ⚡ 修正： depth + 1
+            ASTNode* rightIntegral = integrate(node->right, depth + 1); 
             if (rightIntegral != nullptr) {
                 ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                mulNode->left = copyTree(node->left); // 完美複製數字
+                mulNode->left = copyTree(node->left); 
                 mulNode->right = rightIntegral;
                 return mulNode;
             }
         }
-        // 情況 B：右邊是數字 (例如 x^2 * 3)
         else if (!leftIsNumber && rightIsNumber) {
-            ASTNode* leftIntegral = integrate(node->left,depth); // 只對左邊積分
-            
+            // ⚡ 修正： depth + 1
+            ASTNode* leftIntegral = integrate(node->left, depth + 1); 
             if (leftIntegral != nullptr) {
                 ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                 mulNode->left = leftIntegral;
-                mulNode->right = copyTree(node->right); // 完美複製數字
+                mulNode->right = copyTree(node->right); 
                 return mulNode;
             }
         }
     }
-
-    // 若不是 +, -, *，或是積分失敗，回傳 nullptr 交給其他法則處理
     return nullptr;
-}
-
-bool isJustX(ASTNode* node) {
-    return node != nullptr && 
-           node->token.type == TokenType::Variable && 
-           node->token.value == "x";
-}
-
-// 輔助函數：判斷是否為 a*x 或單純的 x，並把常數 a 抓出來
-bool isLinearX(ASTNode* node, double& a) {
-    if (node == nullptr) return false;
-
-    // 情況 1：單純的 x (相當於 1 * x)
-    if (node->token.type == TokenType::Variable && node->token.value == "x") {
-        a = 1.0;
-        return true;
-    }
-
-    // 情況 2：遇到乘法 a * x 或 x * a
-    if (node->token.type == TokenType::Operator && node->token.value == "*") {
-        bool leftIsNum = (node->left && node->left->token.type == TokenType::Number);
-        bool rightIsX = (node->right && node->right->token.type == TokenType::Variable && node->right->token.value == "x");
-        
-        bool rightIsNum = (node->right && node->right->token.type == TokenType::Number);
-        bool leftIsX = (node->left && node->left->token.type == TokenType::Variable && node->left->token.value == "x");
-
-        // 如果是 a * x
-        if (leftIsNum && rightIsX) {
-            a = stod(node->left->token.value);
-            return true;
-        }
-        // 如果是 x * a
-        if (leftIsX && rightIsNum) {
-            a = stod(node->right->token.value);
-            return true;
-        }
-    }
-
-    return false; // 不是線性結構 (例如 x^2 或是 sin(x))
 }
 
 ASTNode* tableIntegral(ASTNode* node) 
@@ -1432,6 +1426,38 @@ ASTNode* tableIntegral(ASTNode* node)
                 }
                 return plusNode_one;
             }
+            case MathFunc::abs: {
+                ASTNode* mulNode1 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                ASTNode* mulNode2 = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                
+                // 建立 0.5
+                ASTNode* halfNode = new ASTNode({TokenType::Number, "0.5", MathFunc::None});
+                // 建立 x (或是內部的變數 u)
+                ASTNode* uNode = copyTree(node->right);
+                // 建立 |x|
+                ASTNode* absNode = new ASTNode({TokenType::Function, "abs", MathFunc::abs});
+                absNode->right = copyTree(node->right);
+
+                // 組裝: 0.5 * u * |u|
+                mulNode2->left = uNode;
+                mulNode2->right = absNode;
+                
+                mulNode1->left = halfNode;
+                mulNode1->right = mulNode2;
+
+                // 如果有常數倍率 (例如 ∫ |2x| dx)，套用你原本寫好的常數補償
+                if (a != 1.0) {
+                    double reciprocal = 1.0 / a;
+                    ASTNode* outerMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                    ASTNode* coefNode = new ASTNode({TokenType::Number, formatDouble(reciprocal), MathFunc::None});
+                    
+                    outerMul->left = coefNode;
+                    outerMul->right = mulNode1;
+                    return outerMul;
+                }
+
+                return mulNode1;
+            }
             
             default:
                 break; // 如果是查表法無法直接積的函數，跳出 switch
@@ -1518,46 +1544,34 @@ double extractCoefficient(ASTNode* node) {
     return 1.0; 
 }
 
-void scanForExpAndTrig(ASTNode* node, ExpTrigMatch& matchResult) {
-    if (node == nullptr) return;
-
-    // --- 檢查自己 ---
-    // 發現 e^...
-    if (node->token.value == "^" && node->left && node->left->token.value == "e") {
-        matchResult.hasExp = true; 
-        // 🌟 把指數部分 (node->right) 丟給幫手去挖 a！
-        matchResult.a = extractCoefficient(node->right); 
-    }
-    // 發現 sin(...)
-    else if (node->token.type == TokenType::Function && node->token.funcType == MathFunc::sin) {
-        matchResult.hasTrig = true;
-        matchResult.isSin = true;
-        // 🌟 把括號裡的東西 (node->right) 丟給幫手去挖 b！
-        matchResult.b = extractCoefficient(node->right); 
-    }
-    // 發現 cos(...)
-    else if (node->token.type == TokenType::Function && node->token.funcType == MathFunc::cos) {
-        matchResult.hasTrig = true;
-        matchResult.isSin = false;
-        // 🌟 一樣丟給幫手去挖 b！
-        matchResult.b = extractCoefficient(node->right); 
-    }
-
-    // --- 繼續遞迴搜查 ---
-    scanForExpAndTrig(node->left, matchResult);
-    scanForExpAndTrig(node->right, matchResult);
-}
-
 ExpTrigMatch matchExpTrigPattern(ASTNode* node) {
     ExpTrigMatch result;
+    // 必須是最頂層的乘法節點
     if (node == nullptr || node->token.value != "*") return result;
-    
-    scanForExpAndTrig(node, result);
 
-    // 結算：如果 e 和 三角函數 都找到了，就判定為「符合特徵」！
-    if (result.hasExp && result.hasTrig) {
-        result.isMatched = true;
-    }
+    ASTNode* leftChild = node->left;
+    ASTNode* rightChild = node->right;
+
+    // 嚴格檢查是否為 e^(ax) * sin(bx) 或是 sin(bx) * e^(ax) 的結構
+    auto checkExpTrig = [&](ASTNode* expNode, ASTNode* trigNode) {
+        // 檢查一邊是否為 e^...
+        if (expNode->token.value == "^" && expNode->left && expNode->left->token.value == "e") {
+            // 檢查另一邊是否為「乾淨的」 sin 或 cos (不能有次方包著它！)
+            if (trigNode->token.type == TokenType::Function &&
+               (trigNode->token.funcType == MathFunc::sin || trigNode->token.funcType == MathFunc::cos)) {
+                
+                result.hasExp = true;
+                result.hasTrig = true;
+                result.a = extractCoefficient(expNode->right);
+                result.b = extractCoefficient(trigNode->right);
+                result.isSin = (trigNode->token.funcType == MathFunc::sin);
+                result.isMatched = true;
+            }
+        }
+    };
+
+    checkExpTrig(leftChild, rightChild);
+    if (!result.isMatched) checkExpTrig(rightChild, leftChild);
 
     return result;
 }
@@ -1724,12 +1738,17 @@ ASTNode* integrationByParts(ASTNode* node,int depth)
     deleteTree(mulNode_right);
     if (integration_vdu == nullptr) 
     {
+        deleteTree(mulNode_left);
+        deleteTree(du);
+        deleteTree(v);
         return nullptr; 
     }
 
     ASTNode* subNode = new ASTNode({TokenType::Operator, "-", MathFunc::None});
     subNode -> left = mulNode_left;
     subNode -> right = integration_vdu;
+    deleteTree(du);
+    deleteTree(v);
     return subNode;
 }
 
@@ -1765,27 +1784,110 @@ void extractConstant(ASTNode* node, double& out_const, ASTNode*& out_base) {
     }
 }
 
+// ===========================================================================
+// 🌟 終極工具：語法樹全功能數值求值器 (對任意 AST 樹代入 x 算出浮點數值)
+// ===========================================================================
+double evaluateTree(ASTNode* node, double x_val) {
+    if (node == nullptr) return 0.0;
+
+    if (node->token.type == TokenType::Number) {
+        return std::stod(node->token.value);
+    }
+    if (node->token.type == TokenType::Variable || node->token.type == TokenType::Constant) {
+        if (node->token.value == "x") return x_val;
+        if (node->token.value == "e" || node->token.value == "E") return std::exp(1.0);
+        if (node->token.value == "pi" || node->token.value == "PI") return std::acos(-1.0);
+    }
+
+    if (node->token.type == TokenType::Operator) {
+        double l = evaluateTree(node->left, x_val);
+        double r = evaluateTree(node->right, x_val);
+        if (node->token.value == "+") return l + r;
+        if (node->token.value == "-") return l - r;
+        if (node->token.value == "*") return l * r;
+        if (node->token.value == "/") return (std::abs(r) < 1e-9) ? 0.0 : l / r; // 防爆
+        if (node->token.value == "^") return std::pow(l, r);
+    }
+
+    if (node->token.type == TokenType::Function && node->right) {
+        double r = evaluateTree(node->right, x_val);
+        string f = node->token.value;
+        if (f == "sin") return std::sin(r);
+        if (f == "cos") return std::cos(r);
+        if (f == "tan") return std::tan(r);
+        if (f == "sec") return 1.0 / std::cos(r);
+        if (f == "csc") return 1.0 / std::sin(r);
+        if (f == "cot") return 1.0 / std::tan(r);
+        if (f == "ln")  return (r <= 0.0) ? 0.0 : std::log(r);
+        if (f == "abs") return std::abs(r);
+        if (f == "arctan") return std::atan(r);
+    }
+    return 0.0;
+}
+
+// ===========================================================================
+// 🌟 終極工具：數值等價測試判定器 (超越字面束縛，直接比對數學本質)
+// ===========================================================================
+bool isMathematicallyEquivalent(ASTNode* a, ASTNode* b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+
+    // 故意挑選一個很醜的無理數作為測試基點 (避免 0, 1, pi/2 等特殊點)
+    double test_x = 0.5235987; // 接近 pi/6，讓三角函數數值非常漂亮且安全
+    
+    double valA = evaluateTree(a, test_x);
+    double valB = evaluateTree(b, test_x);
+
+    // 如果代入同一個數字，兩者算出來的數值幾乎一樣，代表它們數學上完全相等！
+    return std::abs(valA - valB) < 1e-6;
+}
+
 double getProportionalConstant(ASTNode* remainNode, ASTNode* duNode) {
+    
     double const_remain = 1.0, const_du = 1.0;
     ASTNode *base_remain = nullptr, *base_du = nullptr;
 
+    // 1. 精準萃取兩邊的常數與核心代數基底
     extractConstant(remainNode, const_remain, base_remain);
     extractConstant(duNode, const_du, base_du);
 
-    // 核心結構相同，則計算比例 k
-    if (isSameTree(base_remain, base_du)) {
-        if (const_du == 0.0) return 0.0; // 防爆機制：避免除以零
+    // 2. 🚀 拋棄外貌協會，使用無理數代值直擊數學靈魂！
+    if (isMathematicallyEquivalent(base_remain, base_du)) {
+        if (std::abs(const_du) < 1e-9) return 0.0; // 安全防禦：避免除以零
         return const_remain / const_du;
     }
 
-    return 0.0; // 核心結構不同，比對失敗
+    return 0.0; 
 }
 
 ASTNode* tryGenericUSubstitution(ASTNode* f_g_node, ASTNode* remain_node) {
     if (!f_g_node || !remain_node) return nullptr;
 
+    // ====================================================
+    // 🚀 全新絕招：直接把整坨 f_g_node 當作 u 測試！
+    // 處理 ∫ u^1 * du 的形式 (完美解決 ln(x)/x, sin(x)cos(x))
+    // ====================================================
+    if (f_g_node->token.value != "^") { 
+        ASTNode* direct_du = derivative(copyTree(f_g_node));
+        double direct_k = getProportionalConstant(remain_node, direct_du);
+        deleteTree(direct_du); // 用完即丟，確保記憶體安全
+
+        if (std::abs(direct_k) > 1e-9) {
+            // 完美命中 ∫ u * du = 1/2 * u^2
+            ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+            powNode->left = copyTree(f_g_node);
+            powNode->right = new ASTNode({TokenType::Number, "2", MathFunc::None});
+            
+            // 乘上 k * (1/2)
+            return multiplyByConstant(powNode, direct_k * 0.5);
+        }
+    }
+
+    // ====================================================
+    // 下面保留原本的內層萃取邏輯 (處理 e^u, sin(u), u^n 等...)
+    // ====================================================
     ASTNode* u = nullptr;
-    
+
     // 步驟 1：萃取內層函數 u
     if (f_g_node->token.value == "^" && f_g_node->left->token.value == "e") {
         u = f_g_node->right; // 狀況 A: e^u
@@ -1794,17 +1896,17 @@ ASTNode* tryGenericUSubstitution(ASTNode* f_g_node, ASTNode* remain_node) {
         u = f_g_node->right; // 狀況 B: sin(u), cos(u)...
     } 
     else if (f_g_node->token.value == "^" && f_g_node->right->token.type == TokenType::Number) {
-        u = f_g_node->left;  
+        u = f_g_node->left;  // 狀況 C: u^n
     }
 
-    if (u == nullptr) return nullptr; // 抓不到 u，此路不通
+    if (u == nullptr) return nullptr; // 抓不到內層 u，此路不通
 
-
+    // 步驟 2：對內層 u 進行微分
     ASTNode* du = derivative(copyTree(u));
     ASTNode* simplified_du = simplify(du);
 
+    // 步驟 3：比對剩餘的節點與 du
     double k = getProportionalConstant(remain_node, simplified_du);
-    
     deleteTree(simplified_du);
 
     if (k == 0.0) return nullptr; // 變數變換失敗
@@ -1812,52 +1914,36 @@ ASTNode* tryGenericUSubstitution(ASTNode* f_g_node, ASTNode* remain_node) {
     // 步驟 4：完美命中！生成對應的積分答案樹
     ASTNode* integrated_f = nullptr;
 
-    // 類型 A: e^u -> 積分是 e^u
     if (f_g_node->token.value == "^" && f_g_node->left->token.value == "e") {
         integrated_f = copyTree(f_g_node); 
     }
-    // 類型 B: cos(u) -> 積分是 sin(u)
     else if (f_g_node->token.funcType == MathFunc::cos) {
         integrated_f = new ASTNode({TokenType::Function, "sin", MathFunc::sin});
         integrated_f->right = copyTree(u); 
     }
-    // 類型 C: sin(u) -> 積分是 -cos(u)
     else if (f_g_node->token.funcType == MathFunc::sin) {
         ASTNode* cosNode = new ASTNode({TokenType::Function, "cos", MathFunc::cos});
         cosNode->right = copyTree(u);
-        
         integrated_f = new ASTNode({TokenType::Operator, "-", MathFunc::None});
         integrated_f->left = new ASTNode({TokenType::Number, "0", MathFunc::None}); 
         integrated_f->right = cosNode;
     }
     else if (f_g_node->token.value == "^" && f_g_node->right->token.type == TokenType::Number) {
-        
-        // 取得目前的指數 n
         double n = std::stod(f_g_node->right->token.value);
-        
-        // 🚨 特例防禦：如果 n 是 -1，也就是 u^(-1) = 1/u，積分結果要是 ln|u|
         if (n == -1.0) {
             ASTNode* absNode = new ASTNode({TokenType::Function, "abs", MathFunc::abs});
-            absNode->right = copyTree(u); // 把 u 包進絕對值
-            
+            absNode->right = copyTree(u); 
             integrated_f = new ASTNode({TokenType::Function, "ln", MathFunc::ln});
             integrated_f->right = absNode;
-        } 
-        // 正常情況：次方加 1，係數除以 (n+1)
-        else {
+        } else {
             double new_n = n + 1.0;
-            
-            // 建立新的次方節點 u^(n+1)
             integrated_f = new ASTNode({TokenType::Operator, "^", MathFunc::None});
             integrated_f->left = copyTree(u);
             integrated_f->right = new ASTNode({TokenType::Number, formatDouble(new_n), MathFunc::None});
-            
-            // 💡 核心魔法：把公式裡的 1/(n+1) 直接融進常數 k 裡面！
             k = k / new_n; 
         }
     }
 
-    // 步驟 5：如果成功套入公式，乘上係數 k 後回傳
     if (integrated_f != nullptr) {
         return multiplyByConstant(integrated_f, k);
     }
@@ -2214,8 +2300,6 @@ double evalPoly(const std::map<int, double>& poly, double x) {
     return result;
 }
 
-
-
 // =======================================================
 // 🌟 分數積分第一戰：多項式長除法 N(x) / D(x) = Q(x) ... R(x)
 // =======================================================
@@ -2330,12 +2414,127 @@ double findIntegerRoot(const std::map<int, double>& poly) {
     return NAN; // 找不到整數根
 }
 
+bool matchTrigProduct(ASTNode* node, ASTNode** sinNode, ASTNode** cosNode, int* m, int* n) {
+    std::vector<ASTNode*> factors;
+    collectFactors(node, factors);
+    *m = 0; *n = 0;
+    
+    for (ASTNode* f : factors) {
+        // 處理 sin(x)^p 或 sin(x)
+        if (f->token.type == TokenType::Function && f->token.value == "sin") { *sinNode = f; *m = 1; }
+        else if (f->token.type == TokenType::Function && f->token.value == "cos") { *cosNode = f; *n = 1; }
+        else if (f->token.value == "^" && f->left->token.type == TokenType::Function) {
+            int p = std::round(std::stod(f->right->token.value));
+            if (f->left->token.value == "sin") { *sinNode = f->left; *m = p; }
+            else if (f->left->token.value == "cos") { *cosNode = f->left; *n = p; }
+        }
+    }
+    return (*m > 0 || *n > 0);
+}
+
+ASTNode* transformTrigForUSub(ASTNode* node, string target, int m, int n) {
+    // 假設 target 為 "sin"，代表 m 為奇數，我們令 u = cos(x), du = -sin(x)dx
+    // 剩下的 sin^m = (sin^2)^((m-1)/2) * sin = (1-cos^2)^((m-1)/2) * sin
+    string u_func = (target == "sin") ? "cos" : "sin";
+    int power = (target == "sin") ? m : n;
+    int k = (power - 1) / 2;
+
+    // 建立 (1 - u^2)^k
+    ASTNode* one = new ASTNode({TokenType::Number, "1"});
+    ASTNode* u_sq = new ASTNode({TokenType::Operator, "^"});
+    u_sq->left = new ASTNode({TokenType::Function, u_func});
+    u_sq->right = new ASTNode({TokenType::Number, "2"});
+    ASTNode* one_minus_u2 = new ASTNode({TokenType::Operator, "-"});
+    one_minus_u2->left = one; one_minus_u2->right = u_sq;
+    
+    ASTNode* poly = (k == 0) ? one_minus_u2 : new ASTNode({TokenType::Operator, "^"});
+    if(k > 0) { poly->left = one_minus_u2; poly->right = new ASTNode({TokenType::Number, std::to_string(k)}); }
+
+    // 建立對應的 cos^n 或 sin^m
+    ASTNode* other_trig = new ASTNode({TokenType::Function, (target == "sin" ? "cos" : "sin")});
+    other_trig->right = new ASTNode({TokenType::Variable, "x"});
+    ASTNode* other_pow = new ASTNode({TokenType::Operator, "^"});
+    other_pow->left = other_trig; other_pow->right = new ASTNode({TokenType::Number, std::to_string(target == "sin" ? n : m)});
+
+    // 最後乘上 du (剝離出來的單次 sin 或 cos)
+    ASTNode* du = new ASTNode({TokenType::Function, target});
+    du->right = new ASTNode({TokenType::Variable, "x"});
+
+    // 組合: poly * other_pow * du
+    ASTNode* res = new ASTNode({TokenType::Operator, "*"});
+    res->left = poly;
+    res->right = new ASTNode({TokenType::Operator, "*"});
+    res->right->left = other_pow; res->right->right = du;
+    
+    // 如果是 du = -sin(x)dx，記得補上負號
+    if (target == "sin") {
+    // 1. 建立乘法節點
+        ASTNode* negOne = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+        ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+    
+    
+        mulNode->left = negOne;
+        mulNode->right = res; // 直接使用指標
+    
+        return mulNode;
+    }
+    return res;
+}
+
+ASTNode* transformTrigByHalfAngle(ASTNode* node) {
+    if (!node) return nullptr;
+
+    // 1. 遞迴處理左右子樹
+    node->left = transformTrigByHalfAngle(node->left);
+    node->right = transformTrigByHalfAngle(node->right);
+
+    // 2. 檢測是否為 sin^2(u) 或 cos^2(u)
+    bool isSinSq = (node->token.value == "^" && 
+                    node->left->token.type == TokenType::Function && 
+                    node->left->token.value == "sin" &&
+                    node->right->token.type == TokenType::Number && 
+                    std::round(std::stod(node->right->token.value)) == 2);
+
+    bool isCosSq = (node->token.value == "^" && 
+                    node->left->token.type == TokenType::Function && 
+                    node->left->token.value == "cos" &&
+                    node->right->token.type == TokenType::Number && 
+                    std::round(std::stod(node->right->token.value)) == 2);
+
+    if (isSinSq || isCosSq) {
+        ASTNode* u = copyTree(node->left->right); // 取得角度 u
+        string op = isCosSq ? "+" : "-";
+
+        // 建立 (1 ± cos(2u)) / 2
+        ASTNode* twoU = new ASTNode({TokenType::Operator, "*"});
+        twoU->left = new ASTNode({TokenType::Number, "2"});
+        twoU->right = u;
+
+        ASTNode* cos2u = new ASTNode({TokenType::Function, "cos", MathFunc::cos});
+        cos2u->right = twoU;
+
+        ASTNode* num = new ASTNode({TokenType::Operator, op});
+        num->left = new ASTNode({TokenType::Number, "1"});
+        num->right = cos2u;
+
+        ASTNode* half = new ASTNode({TokenType::Operator, "/"});
+        half->left = num;
+        half->right = new ASTNode({TokenType::Number, "2"});
+
+        // 替換掉原本的節點
+        deleteTree(node);
+        return half;
+    }
+
+    return node;
+}
+
 // ===========================================================================
 // 🌟 終極完全體：微積分核心積分引擎 (Integrate Engine)
 // ===========================================================================
 ASTNode* integrate(ASTNode* node, int depth)
 {
-    if (node == nullptr) return nullptr;
+    if (node == nullptr || depth > 15) return nullptr;    
 
     // ==========================================
     // 【防線 1】常數項與特種查表
@@ -2364,226 +2563,151 @@ ASTNode* integrate(ASTNode* node, int depth)
     // 【防線 2.5】有理函數 (分數) 專用戰略區
     // ==========================================
     if (node->token.type == TokenType::Operator && node->token.value == "/") {
-        // 檢查分子分母是否都是「純多項式」
-        if (isPolynomial(node->left) && isPolynomial(node->right)) {
+        // ⚔️ 分數戰略 0：分子加減法拆解 (Split Numerator)
+        if (node->left->token.type == TokenType::Operator && 
+           (node->left->token.value == "+" || node->left->token.value == "-")) {
             
+            ASTNode* newPlusMinus = new ASTNode({TokenType::Operator, node->left->token.value, MathFunc::None});
+            ASTNode* div1 = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+            div1->left = copyTree(node->left->left); div1->right = copyTree(node->right);
+            ASTNode* div2 = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+            div2->left = copyTree(node->left->right); div2->right = copyTree(node->right);
+            
+            newPlusMinus->left = div1; newPlusMinus->right = div2;
+            ASTNode* result = integrate(newPlusMinus, depth);
+            deleteTree(newPlusMinus);
+            if (result != nullptr) return result;
+        }
+
+        // ⚔️ 分數戰略 A & B：只有上下都是純多項式時，才准走長除法與部分分式線！
+        if (isPolynomial(node->left) && isPolynomial(node->right)) {
             auto numMap = astToPolyMap(node->left);
             auto denMap = astToPolyMap(node->right);
-            
             int degN = numMap.empty() ? 0 : numMap.rbegin()->first;
             int degD = denMap.empty() ? 0 : denMap.rbegin()->first;
             
-            // ⚔️ 分數戰略 A：多項式長除法 (當分子次數 >= 分母次數)
+            // 多項式長除法 (degN >= degD)
             if (degN >= degD && degD > 0) {
                 std::map<int, double> Q, R;
                 polynomialLongDivision(numMap, denMap, Q, R);
-                
-                // 把算出來的商 Q 和 餘數 R 變回 AST 語法樹
-                ASTNode* qNode = polyMapToAST(Q);
-                ASTNode* rNode = polyMapToAST(R);
-                
-                // 組裝新算式： Q(x) + R(x) / D(x)
+                ASTNode* qNode = polyMapToAST(Q); ASTNode* rNode = polyMapToAST(R);
                 ASTNode* newDiv = new ASTNode({TokenType::Operator, "/", MathFunc::None});
-                newDiv->left = rNode;
-                newDiv->right = copyTree(node->right); // 分母照舊
-                
+                newDiv->left = rNode; newDiv->right = copyTree(node->right);
                 ASTNode* finalRes = new ASTNode({TokenType::Operator, "+", MathFunc::None});
-                finalRes->left = qNode;
-                finalRes->right = newDiv;
+                finalRes->left = qNode; finalRes->right = newDiv;
                 
-                // 🚀 把降維拆解完的算式，丟回引擎重新積分！
                 ASTNode* result = integrate(finalRes, depth);
                 deleteTree(finalRes);
-                
                 if (result != nullptr) return result;
             }
-
-            // ⚔️ 分數戰略 B：真分式拆解與轉換 (當分子次數 < 分母次數)
+            // 真分式拆解 (degN < degD)
             else if (degN < degD && degD > 0) {
-                
-                // 🚀 新增技能：部分分式展開 (Partial Fractions) - 針對二次分母
                 if (degD == 2) {
                     double a_coeff = denMap.count(2) ? denMap[2] : 0.0;
                     double b_coeff = denMap.count(1) ? denMap[1] : 0.0;
                     double c_coeff = denMap.count(0) ? denMap[0] : 0.0;
-
-                    // 計算判別式 b^2 - 4ac
                     double discriminant = b_coeff * b_coeff - 4 * a_coeff * c_coeff;
 
-                    // 如果判別式 > 0，代表分母有兩個相異實根，啟動部分分式！
                     if (discriminant > 0 && a_coeff != 0.0) {
-                        // 算出兩個根 r1, r2
                         double r1 = (-b_coeff + sqrt(discriminant)) / (2 * a_coeff);
                         double r2 = (-b_coeff - sqrt(discriminant)) / (2 * a_coeff);
+                        double num_r1 = evalPoly(numMap, r1); double num_r2 = evalPoly(numMap, r2);
+                        double A = num_r1 / (a_coeff * (r1 - r2)); double B = num_r2 / (a_coeff * (r2 - r1));
 
-                        // 使用 Heaviside 掩蓋法算 A 和 B
-                        double num_r1 = evalPoly(numMap, r1);
-                        double num_r2 = evalPoly(numMap, r2);
-
-                        double A = num_r1 / (a_coeff * (r1 - r2));
-                        double B = num_r2 / (a_coeff * (r2 - r1));
-
-                        // 建立 A * (x - r1)^-1
                         ASTNode* term1 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
-                        term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
-                        term1->right = new ASTNode({TokenType::Number, formatDouble(r1), MathFunc::None});
+                        term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None}); term1->right = new ASTNode({TokenType::Number, formatDouble(r1), MathFunc::None});
                         ASTNode* pow1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                         pow1->left = term1; pow1->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
                         ASTNode* partA = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                        partA->left = new ASTNode({TokenType::Number, formatDouble(A), MathFunc::None});
-                        partA->right = pow1;
+                        partA->left = new ASTNode({TokenType::Number, formatDouble(A), MathFunc::None}); partA->right = pow1;
 
-                        // 建立 B * (x - r2)^-1
                         ASTNode* term2 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
-                        term2->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
-                        term2->right = new ASTNode({TokenType::Number, formatDouble(r2), MathFunc::None});
+                        term2->left = new ASTNode({TokenType::Variable, "x", MathFunc::None}); term2->right = new ASTNode({TokenType::Number, formatDouble(r2), MathFunc::None});
                         ASTNode* pow2 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                         pow2->left = term2; pow2->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
                         ASTNode* partB = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                        partB->left = new ASTNode({TokenType::Number, formatDouble(B), MathFunc::None});
-                        partB->right = pow2;
+                        partB->left = new ASTNode({TokenType::Number, formatDouble(B), MathFunc::None}); partB->right = pow2;
 
-                        // 把兩半用加號接起來： A/(x-r1) + B/(x-r2)
                         ASTNode* finalPF = new ASTNode({TokenType::Operator, "+", MathFunc::None});
-                        finalPF->left = partA;
-                        finalPF->right = partB;
+                        finalPF->left = partA; finalPF->right = partB;
 
-                        // 丟回引擎重新積分！
                         ASTNode* result = integrate(finalPF, depth);
                         deleteTree(finalPF);
                         if (result != nullptr) return result;
                     }
-
-                    // ... 前面的 Heaviside 掩蓋法 (discriminant > 0) ...
-                    
-                    // 🌟 新增技能：無實根的二次分母 (Arctan 終極公式)
-                    // 處理 ∫ K / (ax^2 + bx + c) dx，當 b^2 - 4ac < 0 且分子為常數時
                     else if (discriminant < 0 && a_coeff != 0.0 && degN == 0) {
-                        
                         double K = numMap.count(0) ? numMap[0] : 0.0;
                         double sqrt_neg_delta = std::sqrt(-discriminant);
-
-                        // 計算外面的係數: 2K / √(-Δ)
                         double outer_coeff = (2.0 * K) / sqrt_neg_delta;
-
-                        // 建立 2ax
                         ASTNode* two_a_x = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                         two_a_x->left = new ASTNode({TokenType::Number, formatDouble(2.0 * a_coeff), MathFunc::None});
                         two_a_x->right = new ASTNode({TokenType::Variable, "x", MathFunc::None});
-
-                        // 建立內部加法: 2ax + b
                         ASTNode* inner_add = nullptr;
-                        if (std::abs(b_coeff) < 1e-9) {
-                            inner_add = two_a_x; // 如果 b 是 0，就只留 2ax
-                        } else {
+                        if (std::abs(b_coeff) < 1e-9) { inner_add = two_a_x; } 
+                        else {
                             string op = (b_coeff < 0) ? "-" : "+";
                             inner_add = new ASTNode({TokenType::Operator, op, MathFunc::None});
-                            inner_add->left = two_a_x;
-                            inner_add->right = new ASTNode({TokenType::Number, formatDouble(std::abs(b_coeff)), MathFunc::None});
+                            inner_add->left = two_a_x; inner_add->right = new ASTNode({TokenType::Number, formatDouble(std::abs(b_coeff)), MathFunc::None});
                         }
-
-                        // 建立內部除法: (2ax + b) / √(-Δ)
                         ASTNode* inner_div = new ASTNode({TokenType::Operator, "/", MathFunc::None});
-                        inner_div->left = inner_add;
-                        inner_div->right = new ASTNode({TokenType::Number, formatDouble(sqrt_neg_delta), MathFunc::None});
-
-                        // 建立 arctan(...) (💡 記得用 strToMathFunc 賦予安全的列舉屬性！)
+                        inner_div->left = inner_add; inner_div->right = new ASTNode({TokenType::Number, formatDouble(sqrt_neg_delta), MathFunc::None});
                         ASTNode* arctanNode = new ASTNode({TokenType::Function, "arctan", strToMathFunc("arctan")});
                         arctanNode->right = inner_div;
-
-                        // 乘上外面的係數，大功告成！
                         ASTNode* finalRes = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                        finalRes->left = new ASTNode({TokenType::Number, formatDouble(outer_coeff), MathFunc::None});
-                        finalRes->right = arctanNode;
-
-                        // 這裡不需要遞迴丟回 integrate，因為我們已經直接算出最終的積分結果了！
+                        finalRes->left = new ASTNode({TokenType::Number, formatDouble(outer_coeff), MathFunc::None}); finalRes->right = arctanNode;
                         return finalRes;
                     }
                 }
-                // 🚀 終極技能：萬用高次降維剝離 (Degree >= 3)
                 else if (degD >= 3) {
-                    // 1. 尋找一個整數根 r
                     double r = findIntegerRoot(denMap);
-                    
                     if (!std::isnan(r)) {
-                        // 2. 建立除式 (x - r)
-                        std::map<int, double> linearFactor;
-                        linearFactor[1] = 1.0;
-                        linearFactor[0] = -r;
-                        
-                        // 3. 長除法拆解分母： D(x) / (x - r) = Q(x)
+                        std::map<int, double> linearFactor; linearFactor[1] = 1.0; linearFactor[0] = -r;
                         std::map<int, double> Q_map, remainderD;
                         polynomialLongDivision(denMap, linearFactor, Q_map, remainderD);
-                        
-                        // 4. 計算常數 A = N(r) / Q(r)
-                        double num_r = evalPoly(numMap, r);
-                        double Q_r = evalPoly(Q_map, r);
-                        
-                        if (std::abs(Q_r) > 1e-9) { // 確保分母不為 0
+                        double num_r = evalPoly(numMap, r); double Q_r = evalPoly(Q_map, r);
+                        if (std::abs(Q_r) > 1e-9) {
                             double A_val = num_r / Q_r;
-                            
-                            // 5. 計算剩下的分子 P(x) = (N(x) - A * Q(x)) / (x - r)
                             std::map<int, double> N_minus_AQ = numMap;
-                            for (auto const& term : Q_map) {
-                                N_minus_AQ[term.first] -= A_val * term.second;
-                            }
-                            
+                            for (auto const& term : Q_map) N_minus_AQ[term.first] -= A_val * term.second;
                             std::map<int, double> P_map, remainderP;
                             polynomialLongDivision(N_minus_AQ, linearFactor, P_map, remainderP);
                             
-                            // ==========================================
-                            // 6. 將解出來的零件組裝成 AST 語法樹
-                            // ==========================================
-                            
-                            // 第一項： A * (x - r)^-1
                             ASTNode* term1 = new ASTNode({TokenType::Operator, "-", MathFunc::None});
-                            term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None});
-                            term1->right = new ASTNode({TokenType::Number, formatDouble(r), MathFunc::None});
+                            term1->left = new ASTNode({TokenType::Variable, "x", MathFunc::None}); term1->right = new ASTNode({TokenType::Number, formatDouble(r), MathFunc::None});
                             ASTNode* pow1 = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                             pow1->left = term1; pow1->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
                             ASTNode* partA = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                            partA->left = new ASTNode({TokenType::Number, formatDouble(A_val), MathFunc::None});
-                            partA->right = pow1;
+                            partA->left = new ASTNode({TokenType::Number, formatDouble(A_val), MathFunc::None}); partA->right = pow1;
 
-                            // 🌟 修正點：第二項 P(x) / Q(x) 必須使用純正的除法 "/" 
-                            // 這樣才能在下一輪遞迴中，精準觸發【防線 2.5】！
-                            ASTNode* P_AST = polyMapToAST(P_map);
-                            ASTNode* Q_AST = polyMapToAST(Q_map);
-                            
+                            ASTNode* P_AST = polyMapToAST(P_map); ASTNode* Q_AST = polyMapToAST(Q_map);
                             ASTNode* partP_Q = new ASTNode({TokenType::Operator, "/", MathFunc::None});
-                            partP_Q->left = P_AST;
-                            partP_Q->right = Q_AST;
+                            partP_Q->left = P_AST; partP_Q->right = Q_AST;
 
-                            // 合併 A /(x-r) + P(x)/Q(x)
                             ASTNode* finalPF = new ASTNode({TokenType::Operator, "+", MathFunc::None});
-                            finalPF->left = partA;
-                            finalPF->right = partP_Q;
+                            finalPF->left = partA; finalPF->right = partP_Q;
 
-                            // 🚀 丟回引擎重新積分！
                             ASTNode* result = integrate(finalPF, depth);
                             deleteTree(finalPF);
                             if (result != nullptr) return result;
                         }
                     }
                 }
-
-                // 🛡️ 兜底戰略 (Fallback)：如果分母無法分解、或是次數不對
-                // 退回原本的 A * B^(-1) 戰術，讓 U-Sub 去碰碰運氣
-                ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
-                powNode->left = copyTree(node->right);
-                powNode->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
-                
-                ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                mulNode->left = copyTree(node->left);
-                mulNode->right = powNode;
-                
-                ASTNode* result = integrate(mulNode, depth);
-                deleteTree(mulNode);
-                
-                if (result != nullptr) return result;
             }
-
         }
+
+        // 🌟 核心修正點：如果走到這裡（代表不是純多項式分數，或者無法被長除法/部分分式處理）
+        // 立刻、無條件將其轉型為 A * B^(-1) 乘法結構，徹底消滅除法節點，防止後續引擎死循環！
+        ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+        powNode->left = copyTree(node->right);
+        powNode->right = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+        
+        ASTNode* mulNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+        mulNode->left = copyTree(node->left);
+        mulNode->right = powNode;
+        
+        ASTNode* result = integrate(mulNode, depth);
+        deleteTree(mulNode);
+        return result; // 這裡直接 return result，不需要往下走多餘的重複兜底！
     }
 
     // ==========================================
@@ -2689,11 +2813,12 @@ ASTNode* integrate(ASTNode* node, int depth)
                     finalCombined = halfSin;
                 }
                 
-                ASTNode* result = integrate(finalCombined, depth);
+                ASTNode* result = integrate(finalCombined, depth+1);
                 if (remainNode) deleteTree(finalCombined); else deleteTree(halfSin);
                 if (result != nullptr) return result;
             }
         }
+
 
         // ⚔️ 戰略 3-D：奇數次方三角剝離法則 (Odd-Power Trig Substitution)
         {
@@ -2767,6 +2892,76 @@ ASTNode* integrate(ASTNode* node, int depth)
                 
                 deleteTree(simplifiedFinal);
                 if (remainNode) deleteTree(finalCombined); else deleteTree(newTarget);
+                
+                if (result != nullptr) return result;
+            }
+        }
+
+        // ⚔️ 戰略 3-D.5：雙偶數純化法則 (Even-Even Purification)
+        // 專門對付 cos^n * sin^m (兩者皆為偶數) 的大魔王
+        {
+            int sinIdx = -1, cosIdx = -1;
+            int m_sin = 0, n_cos = 0;
+            
+            // 掃描尋找是否同時存在偶數次方的 sin 和 cos
+            for (size_t i = 0; i < factors.size(); ++i) {
+                ASTNode* f = factors[i];
+                if (f->token.value == "^" && f->left && (f->left->token.value == "sin" || f->left->token.value == "cos")) {
+                    if (f->right && f->right->token.type == TokenType::Number) {
+                        int p = std::round(std::stod(f->right->token.value));
+                        if (p % 2 == 0) {
+                            if (f->left->token.value == "sin") { sinIdx = i; m_sin = p; }
+                            else if (f->left->token.value == "cos") { cosIdx = i; n_cos = p; }
+                        }
+                    }
+                }
+            }
+            
+            // 如果同時抓到偶數的 sin 和 cos，啟動純化！
+            if (sinIdx != -1 && cosIdx != -1) {
+                ASTNode* uNode = factors[sinIdx]->left->right; // 取出角度 x
+                int k = m_sin / 2;
+                
+                // 建立 (1 - cos^2(x))
+                ASTNode* cosNode = new ASTNode({TokenType::Function, "cos", MathFunc::cos});
+                cosNode->right = copyTree(uNode);
+                
+                ASTNode* cosSq = new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                cosSq->left = cosNode;
+                cosSq->right = new ASTNode({TokenType::Number, "2", MathFunc::None});
+                
+                ASTNode* oneMinus = new ASTNode({TokenType::Operator, "-", MathFunc::None});
+                oneMinus->left = new ASTNode({TokenType::Number, "1", MathFunc::None});
+                oneMinus->right = cosSq;
+                
+                // 套上剩餘的次方 k
+                ASTNode* convertedPart = (k == 1) ? oneMinus : new ASTNode({TokenType::Operator, "^", MathFunc::None});
+                if (k != 1) { 
+                    convertedPart->left = oneMinus; 
+                    convertedPart->right = new ASTNode({TokenType::Number, std::to_string(k), MathFunc::None}); 
+                }
+                
+                // 組合其餘項目 (保留 cos^n，剔除原本的 sin^m)
+                std::vector<ASTNode*> remainFactors;
+                for (size_t i = 0; i < factors.size(); ++i) {
+                    if (static_cast<int>(i) != sinIdx) remainFactors.push_back(copyTree(factors[i])); // 安全複製
+                }
+                ASTNode* remainNode = rebuildProduct(remainFactors);
+                
+                ASTNode* finalCombined = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                finalCombined->left = convertedPart;
+                finalCombined->right = remainNode;
+                
+                // 🚀 強制展開，把 (1-cos^2)^k * cos^n 變成一長串純 cos 多項式
+                ASTNode* expandedFinal = expand(finalCombined);
+                ASTNode* simplifiedFinal = simplify(expandedFinal);
+                
+                // 重新遞迴，現在引擎看到的會是 cos^4 - 2cos^6 + cos^8
+                ASTNode* result = integrate(simplifiedFinal, depth);
+                
+                // 記憶體清理
+                deleteTree(simplifiedFinal);
+                deleteTree(finalCombined);
                 
                 if (result != nullptr) return result;
             }
@@ -2855,7 +3050,7 @@ ASTNode* integrate(ASTNode* node, int depth)
 
         // ⚔️ 戰略 3-F：分部積分 (Integration By Parts - 僅限乘法，最後大絕招)
         if (node->token.value == "*") {
-            ASTNode* byPartsResult = integrationByParts(node, depth);
+            ASTNode* byPartsResult = integrationByParts(node, depth+1);
             if (byPartsResult != nullptr) return byPartsResult; 
         }
     }
@@ -2915,105 +3110,227 @@ ASTNode* integrate(ASTNode* node, int depth)
     return nullptr; // 所有的招數都用盡了，宣告無法積分
 }
 
+// 🌟 將小數轉化為分數節點 (展示專用)
+ASTNode* doubleToFractionAST(double val) {
+    if (std::abs(val - std::round(val)) < 1e-9) {
+        return new ASTNode({TokenType::Number, formatDouble(std::round(val)), MathFunc::None});
+    }
+    int sign = (val < 0) ? -1 : 1; val = std::abs(val); double tolerance = 1.0E-6;
+    double h1 = 1, h2 = 0, k1 = 0, k2 = 1, b = val;
+    do {
+        double a = std::floor(b); double aux = h1; h1 = a * h1 + h2; h2 = aux;
+        aux = k1; k1 = a * k1 + k2; k2 = aux;
+        if (b - a < tolerance) break; b = 1.0 / (b - a);
+    } while (std::abs(val - h1/k1) > val * tolerance && k1 < 10000);
+    
+    int num = sign * static_cast<int>(std::round(h1)); int den = static_cast<int>(std::round(k1));
+    if (den == 1) return new ASTNode({TokenType::Number, std::to_string(num), MathFunc::None});
+    
+    ASTNode* divNode = new ASTNode({TokenType::Operator, "/", MathFunc::None});
+    divNode->left = new ASTNode({TokenType::Number, std::to_string(num), MathFunc::None});
+    divNode->right = new ASTNode({TokenType::Number, std::to_string(den), MathFunc::None});
+    return divNode;
+}
+
+// 🌟 印出前的最後一道手續：掃描全樹，將小數節點置換為分數節點
+ASTNode* postProcessFractions(ASTNode* node) {
+    if (!node) return nullptr;
+    node->left = postProcessFractions(node->left);
+    node->right = postProcessFractions(node->right);
+    
+    if (node->token.type == TokenType::Number) {
+        double val = std::stod(node->token.value);
+        if (std::abs(val - std::round(val)) > 1e-9) {
+            ASTNode* fracNode = doubleToFractionAST(val);
+            deleteTree(node);
+            return fracNode; 
+        }
+    }
+    return node;
+}
+
+struct PolyTerm { 
+    double coeff; 
+    ASTNode* base; 
+};
+
+void extractTerms(ASTNode* node, std::vector<PolyTerm>& terms, double sign) {
+    if (!node) return;
+    
+    if (node->token.value == "+") {
+        extractTerms(node->left, terms, sign);
+        extractTerms(node->right, terms, sign);
+    } else if (node->token.value == "-") {
+        // 處理減法與括號負號： -(A+B) 會把 -1 的 sign 往右邊傳遞
+        if (!node->left || (node->left->token.type == TokenType::Number && node->left->token.value == "0")) {
+            extractTerms(node->right, terms, -sign); 
+        } else {
+            extractTerms(node->left, terms, sign);
+            extractTerms(node->right, terms, -sign);
+        }
+    } else {
+        // 抵達葉節點，萃取係數與變數基底
+        double c = sign;
+        ASTNode* base = node;
+        
+        if (node->token.value == "*") {
+            if (node->left && node->left->token.type == TokenType::Number) {
+                c *= std::stod(node->left->token.value); 
+                base = node->right;
+            } else if (node->right && node->right->token.type == TokenType::Number) {
+                c *= std::stod(node->right->token.value); 
+                base = node->left;
+            }
+        } else if (node->token.type == TokenType::Number) {
+            c *= std::stod(node->token.value); 
+            base = nullptr; // nullptr 代表純數字常數
+        }
+        terms.push_back({c, base});
+    }
+}
+
 ASTNode* simplify(ASTNode* node)
 {
     if (node == nullptr) return nullptr;
 
-    // 1. 先遞迴化簡左右子樹 (由下往上化簡)
+    static int depth_counter = 0;
+    depth_counter++;
+    if (depth_counter > 500) { 
+        depth_counter--; 
+        return node; 
+    }
+
     node->left = simplify(node->left);
     node->right = simplify(node->right);
 
-    // 基本節點直接回傳
-    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable) 
-        return node;
-    
-    // 函數的常數求值 (例如 ln(e), sin(0))
-    if (node->token.type == TokenType::Function && node->right && node->right->token.type == TokenType::Number) {
-        double val = stod(node->right->token.value);
-        double result = 0;
-        string funcName = node->token.value;
-        bool computable = false;
+    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable) {
+        depth_counter--; return node;
+    }
 
-        if (funcName == "ln") { result = log(val); computable = true; }
-        else if (funcName == "log") { result = log10(val); computable = true; }
-        else if (funcName == "sin") { result = sin(val); computable = true; }
-        else if (funcName == "cos") { result = cos(val); computable = true; }
-
-        if (computable) {
-            if (abs(result - round(result)) < 1e-9) {
-                result = round(result);
-                deleteTree(node); 
-                return new ASTNode({TokenType::Number, formatDouble(result), MathFunc::None});
+    // =======================================================
+    // 🌟 函數 (Function) 化簡
+    // =======================================================
+    if (node->token.type == TokenType::Function) {
+        if (node->token.value == "ln" && node->right) {
+            if (node->right->token.type == TokenType::Number && std::stod(node->right->token.value) == 1.0) {
+                deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, "0", MathFunc::None});
+            }
+            bool isEuler = false;
+            if (node->right->token.value == "e" || node->right->token.value == "E") isEuler = true;
+            if (node->right->token.type == TokenType::Number && std::abs(std::stod(node->right->token.value) - exp(1.0)) < 1e-9) isEuler = true;
+            if (isEuler) {
+                deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, "1", MathFunc::None});
+            }
+            if (node->right->token.type == TokenType::Operator && node->right->token.value == "^") {
+                ASTNode* baseNode = node->right->left;
+                bool isBaseEuler = false;
+                if (baseNode && (baseNode->token.value == "e" || baseNode->token.value == "E")) isBaseEuler = true;
+                if (baseNode && baseNode->token.type == TokenType::Number && std::abs(std::stod(baseNode->token.value) - exp(1.0)) < 1e-9) isBaseEuler = true;
+                if (isBaseEuler) {
+                    ASTNode* exponentNode = node->right->right; 
+                    ASTNode* keepNode = copyTree(exponentNode); 
+                    deleteTree(node); depth_counter--; return simplify(keepNode); 
+                }
             }
         }
+        if (node->right && node->right->token.type == TokenType::Number) {
+            double val = stod(node->right->token.value);
+            double result = 0; bool computable = false;
+            string funcName = node->token.value;
+            if (funcName == "ln" && val > 0) { result = log(val); computable = true; }
+            else if (funcName == "log" && val > 0) { result = log10(val); computable = true; }
+            else if (funcName == "sin") { result = sin(val); computable = true; }
+            else if (funcName == "cos") { result = cos(val); computable = true; }
+
+            if (computable && abs(result - round(result)) < 1e-9) {
+                result = round(result);
+                deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, formatDouble(result), MathFunc::None});
+            }
+        }
+        depth_counter--; return node; 
     }
 
-    if (node->token.type == TokenType::Function) {
-        return node;
-    }
-
-    // 純數字運算
+    // =======================================================
+    // 🌟 純數字運算
+    // =======================================================
     string op = node->token.value;
-    if (node->left && node->right && 
-        node->left->token.type == TokenType::Number && 
-        node->right->token.type == TokenType::Number) 
-    {
+    if (node->left && node->right && node->left->token.type == TokenType::Number && node->right->token.type == TokenType::Number) {
         double l_val = stod(node->left->token.value);
         double r_val = stod(node->right->token.value);
         double result = 0;
-        
         if (op == "+") result = l_val + r_val;
         else if (op == "-") result = l_val - r_val;
         else if (op == "*") result = l_val * r_val;
-        else if (op == "/") result = l_val / r_val;
+        else if (op == "/") {
+            if (std::abs(r_val) < 1e-9) { depth_counter--; return node; }
+            result = l_val / r_val;
+        }
         else if (op == "^") result = pow(l_val, r_val);
+        deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, formatDouble(result), MathFunc::None});
+    }
 
-        deleteTree(node);
-        return new ASTNode({TokenType::Number, formatDouble(result), MathFunc::None});
+    // =======================================================
+    // 🌟 運算符號化簡：除法 (/)
+    // =======================================================
+    if (op == "/") {
+        if (node->left && node->left->token.value == "0") {
+            deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, "0", MathFunc::None});
+        }
+        if (node->right && node->right->token.value == "1") {
+            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); depth_counter--; return keep;
+        }
+        if (isSameTree(node->left, node->right)) {
+            deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, "1", MathFunc::None});
+        }
+        // 🎯 降維打擊： A / 常數 -> (1/常數) * A
+        if (node->right && node->right->token.type == TokenType::Number) {
+            double denom = std::stod(node->right->token.value);
+            if (std::abs(denom) > 1e-9) {
+                ASTNode* newMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                newMul->left = new ASTNode({TokenType::Number, formatDouble(1.0 / denom), MathFunc::None});
+                newMul->right = copyTree(node->left);
+                deleteTree(node); depth_counter--; return simplify(newMul);
+            }
+        }
     }
 
     // =======================================================
     // 🌟 運算符號化簡：乘法 (*) 
     // =======================================================
-    if (op == "*") 
-    {
-        if ((node->left && node->left->token.value == "0") || 
-            (node->right && node->right->token.value == "0")) {
-            deleteTree(node); 
-            return new ASTNode({TokenType::Number, "0", MathFunc::None});
+    if (op == "*") {
+        if ((node->left && node->left->token.value == "0") || (node->right && node->right->token.value == "0")) {
+            deleteTree(node); depth_counter--; return new ASTNode({TokenType::Number, "0", MathFunc::None});
         }
         if (node->left && node->left->token.value == "1") {
-            ASTNode* keep = node->right; node->right = nullptr; deleteTree(node); return keep;
+            ASTNode* keep = node->right; node->right = nullptr; deleteTree(node); depth_counter--; return keep;
         }
         if (node->right && node->right->token.value == "1") {
-            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); return keep;
+            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); depth_counter--; return keep;
         }
 
-        // ⚙️ 新齒輪一：分式與乘法結合律 (A / B) * C -> (A * C) / B
-        if (node->left && node->left->token.type == TokenType::Operator && node->left->token.value == "/") {
-            ASTNode* fraction = node->left; ASTNode* C = node->right;
-            ASTNode* newDiv = new ASTNode({TokenType::Operator, "/", MathFunc::None});
-            ASTNode* newMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-            newMul->left = fraction->left; fraction->left = nullptr;
-            newMul->right = C; node->right = nullptr;
-            newDiv->left = newMul; newDiv->right = fraction->right; fraction->right = nullptr;
-            deleteTree(node); return simplify(newDiv);
+        // 🎯 強制分配律： A * (B ± C) -> A*B ± A*C
+        if (node->right && (node->right->token.value == "+" || node->right->token.value == "-")) {
+            ASTNode* newOp = new ASTNode({TokenType::Operator, node->right->token.value, MathFunc::None});
+            ASTNode* leftMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            leftMul->left = copyTree(node->left); leftMul->right = copyTree(node->right->left);
+            ASTNode* rightMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            rightMul->left = copyTree(node->left); rightMul->right = copyTree(node->right->right);
+            newOp->left = leftMul; newOp->right = rightMul;
+            deleteTree(node); depth_counter--; return simplify(newOp);
         }
-        // ⚙️ 新齒輪一反向：C * (A / B) -> (C * A) / B
-        if (node->right && node->right->token.type == TokenType::Operator && node->right->token.value == "/") {
-            ASTNode* C = node->left; ASTNode* fraction = node->right;
-            ASTNode* newDiv = new ASTNode({TokenType::Operator, "/", MathFunc::None});
-            ASTNode* newMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-            newMul->left = C; node->left = nullptr;
-            newMul->right = fraction->left; fraction->left = nullptr;
-            newDiv->left = newMul; newDiv->right = fraction->right; fraction->right = nullptr;
-            deleteTree(node); return simplify(newDiv);
+        // 🎯 強制分配律： (A ± B) * C -> A*C ± B*C
+        if (node->left && (node->left->token.value == "+" || node->left->token.value == "-")) {
+            ASTNode* newOp = new ASTNode({TokenType::Operator, node->left->token.value, MathFunc::None});
+            ASTNode* leftMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            leftMul->left = copyTree(node->left->left); leftMul->right = copyTree(node->right);
+            ASTNode* rightMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+            rightMul->left = copyTree(node->left->right); rightMul->right = copyTree(node->right);
+            newOp->left = leftMul; newOp->right = rightMul;
+            deleteTree(node); depth_counter--; return simplify(newOp);
         }
 
-        // ⚙️ 新齒輪二：乘法串同底數冪與常數大歸併 (CAS Core Polynomial Simplifier)
         std::vector<ASTNode*> factors;
         collectFactors(node, factors);
-
         double final_coeff = 1.0;
         struct BasePower { ASTNode* base; double power; };
         std::vector<BasePower> merged;
@@ -3034,166 +3351,152 @@ ASTNode* simplify(ASTNode* node)
             }
         }
 
-        // 重新組裝打平後的因子
         std::vector<ASTNode*> new_factors;
         if (final_coeff != 1.0 || merged.empty()) {
             new_factors.push_back(new ASTNode({TokenType::Number, formatDouble(final_coeff), MathFunc::None}));
         }
         for (const auto& mp : merged) {
             if (mp.power == 0.0) continue;
-            if (mp.power == 1.0) {
-                new_factors.push_back(copyTree(mp.base));
-            } else {
+            if (mp.power == 1.0) { new_factors.push_back(copyTree(mp.base)); } 
+            else {
                 ASTNode* powNode = new ASTNode({TokenType::Operator, "^", MathFunc::None});
-                powNode->left = copyTree(mp.base);
-                powNode->right = new ASTNode({TokenType::Number, formatDouble(mp.power), MathFunc::None});
+                powNode->left = copyTree(mp.base); powNode->right = new ASTNode({TokenType::Number, formatDouble(mp.power), MathFunc::None});
                 new_factors.push_back(powNode);
             }
         }
 
-        // 如果真的有因子被成功合併了，釋放舊樹，回傳新組裝的標準樹
         if (new_factors.size() < factors.size() || (new_factors.size() == 1 && final_coeff == 0.0)) {
             ASTNode* rebuilt = rebuildProduct(new_factors);
             for (ASTNode* nf : new_factors) deleteTree(nf);
-            deleteTree(node); return simplify(rebuilt);
+            deleteTree(node); depth_counter--; return simplify(rebuilt);
         }
         for (ASTNode* nf : new_factors) deleteTree(nf);
     }
 
     // =======================================================
-    // 🌟 運算符號化簡：除法 (/)
-    // =======================================================
-    if (op == "/") 
-    {
-        if (node->right && node->right->token.value == "1") {
-            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); return keep;
-        }
-        if (node->left && node->left->token.value == "0") {
-            deleteTree(node); return new ASTNode({TokenType::Number, "0", MathFunc::None});
-        }
-        if (isSameTree(node->left, node->right)) {
-            deleteTree(node); return new ASTNode({TokenType::Number, "1", MathFunc::None});
-        }
-    }
-
-    // =======================================================
     // 🌟 運算符號化簡：加法 (+) & 減法 (-)
     // =======================================================
-    if (op == "+") 
-    {
-        if (node->left && node->left->token.value == "0") {
-            ASTNode* keep = node->right; node->right = nullptr; deleteTree(node); return keep;
-        }
-        if (node->right && node->right->token.value == "0") {
-            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); return keep;
-        }
+    // =======================================================
+    // 🌟 運算符號化簡：加法 (+) & 減法 (-) 【終極打平合併版】
+    // =======================================================
+    if (op == "+" || op == "-") {
+        std::vector<PolyTerm> terms;
+        extractTerms(node, terms, 1.0); // 瞬間把整棵加減法樹打平，吸出所有項！
 
-        string var1, var2; double c1, c2;
-        if (isLikeTerm(node->left, var1, c1) && isLikeTerm(node->right, var2, c2)) {
-            if (var1 == var2) { 
-                double newCoeff = c1 + c2;
-                if (newCoeff == 0) { deleteTree(node); return new ASTNode({TokenType::Number, "0", MathFunc::None}); }
-                if (newCoeff == 1) { ASTNode* varNode = new ASTNode({TokenType::Variable, var1, MathFunc::None}); deleteTree(node); return varNode; }
-                ASTNode* res = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                res->left = new ASTNode({TokenType::Number, formatDouble(newCoeff), MathFunc::None});
-                res->right = new ASTNode({TokenType::Variable, var1, MathFunc::None});
-                deleteTree(node); return res;
-            }
-        }
-    }
-
-    if (op == "-") 
-    {
-        if (node->right && node->right->token.value == "0") {
-            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); return keep;
-        }
-        if (node->left && node->left->token.value == "0") {
-            ASTNode* keep = node->right; node->right = nullptr; deleteTree(node);
-            ASTNode* negNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-            negNode->left = new ASTNode({TokenType::Number, "-1", MathFunc::None});
-            negNode->right = keep; return negNode;
-        }
-
-        if (node->left && node->right && node->left->token.type == TokenType::Number &&
-            node->right->token.type == TokenType::Operator && node->right->token.value == "*") 
-        {
-            ASTNode* rLeft = node->right->left; ASTNode* rRight = node->right->right;
-            if (rLeft && rLeft->token.type == TokenType::Number && std::stod(node->left->token.value) == std::stod(rLeft->token.value)) {
-                if (rRight && rRight->token.type == TokenType::Operator && rRight->token.value == "^" && rRight->right && rRight->right->token.value == "2") {
-                    ASTNode* funcNode = rRight->left;
-                    if (funcNode && funcNode->token.type == TokenType::Function) {
-                        string funcName = funcNode->token.value;
-                        if (funcName == "sin" || funcName == "cos") {
-                            string newFuncName = (funcName == "sin") ? "cos" : "sin";
-                            ASTNode* newTerm = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                            newTerm->left = copyTree(node->left);
-                            ASTNode* newPow = new ASTNode({TokenType::Operator, "^", MathFunc::None});
-                            ASTNode* newFunc = new ASTNode({TokenType::Function, newFuncName, MathFunc::None});
-                            newFunc->right = copyTree(funcNode->right);
-                            newPow->left = newFunc; newPow->right = new ASTNode({TokenType::Number, "2", MathFunc::None});
-                            newTerm->right = newPow; deleteTree(node); return newTerm;
-                        }
+        std::vector<PolyTerm> merged;
+        double const_sum = 0.0;
+        
+        // 1. 同類項全域加總
+        for (const auto& t : terms) {
+            if (t.base == nullptr) {
+                const_sum += t.coeff;
+            } else {
+                bool found = false;
+                for (auto& m : merged) {
+                    if (isSameTree(m.base, t.base)) {
+                        m.coeff += t.coeff;
+                        found = true;
+                        break;
                     }
                 }
+                if (!found) merged.push_back({t.coeff, t.base}); 
             }
         }
 
-        string var1, var2; double c1, c2;
-        if (isLikeTerm(node->left, var1, c1) && isLikeTerm(node->right, var2, c2)) {
-            if (var1 == var2) { 
-                double newCoeff = c1 - c2;
-                if (newCoeff == 0) { deleteTree(node); return new ASTNode({TokenType::Number, "0", MathFunc::None}); }
-                if (newCoeff == 1) { ASTNode* varNode = new ASTNode({TokenType::Variable, var1, MathFunc::None}); deleteTree(node); return varNode; }
-                ASTNode* res = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                res->left = new ASTNode({TokenType::Number, formatDouble(newCoeff), MathFunc::None});
-                res->right = new ASTNode({TokenType::Variable, var1, MathFunc::None});
-                deleteTree(node); return res;
+        // 2. 將合併完的項，重新組裝成一條乾淨的加減法鍊
+        ASTNode* rebuilt = nullptr;
+        
+        auto addTerm = [&](ASTNode* termNode, double coeff) {
+            if (!rebuilt) {
+                // 第一項的負號處理
+                if (coeff < 0) {
+                    if (termNode->token.value == "*") {
+                        deleteTree(termNode->left);
+                        termNode->left = new ASTNode({TokenType::Number, formatDouble(coeff), MathFunc::None});
+                        rebuilt = termNode;
+                    } else {
+                        ASTNode* negMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                        negMul->left = new ASTNode({TokenType::Number, "-1", MathFunc::None});
+                        negMul->right = termNode;
+                        rebuilt = negMul;
+                    }
+                } else {
+                    rebuilt = termNode;
+                }
+            } else {
+                // 第二項以後，用 + 或 - 連接
+                ASTNode* opNode = new ASTNode({TokenType::Operator, (coeff < 0) ? "-" : "+", MathFunc::None});
+                opNode->left = rebuilt;
+                opNode->right = termNode;
+                rebuilt = opNode;
             }
+        };
+
+        // 放入常數項
+        if (std::abs(const_sum) > 1e-9) {
+            ASTNode* numNode = new ASTNode({TokenType::Number, formatDouble(std::abs(const_sum)), MathFunc::None});
+            addTerm(numNode, const_sum);
         }
+
+        // 放入變數項
+        for (const auto& m : merged) {
+            if (std::abs(m.coeff) < 1e-9) continue; // 係數相加為 0，完美對消！
+            
+            ASTNode* baseCopy = copyTree(m.base);
+            ASTNode* termNode = nullptr;
+            double absCoeff = std::abs(m.coeff);
+
+            if (std::abs(absCoeff - 1.0) < 1e-9) {
+                termNode = baseCopy; // 係數為 1，不印出來
+            } else {
+                termNode = new ASTNode({TokenType::Operator, "*", MathFunc::None});
+                termNode->left = new ASTNode({TokenType::Number, formatDouble(absCoeff), MathFunc::None});
+                termNode->right = baseCopy;
+            }
+            addTerm(termNode, m.coeff);
+        }
+        
+        if (!rebuilt) rebuilt = new ASTNode({TokenType::Number, "0", MathFunc::None});
+        
+        deleteTree(node); // 釋放原本那棵充滿雜亂括號的樹
+        depth_counter--;
+        return rebuilt; // 回傳乾淨俐落的 AST
     }
 
     // =======================================================
     // 🌟 運算符號化簡：次方 (^)
     // =======================================================
-    if (op == "^") 
-    {
+    if (op == "^") {
         if (node->right && node->right->token.value == "1") {
-            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); return keep;
+            ASTNode* keep = node->left; node->left = nullptr; deleteTree(node); depth_counter--; return keep;
         }
-
         if (node->right && node->right->token.value == "0.5") {
             if (node->left && node->left->token.type == TokenType::Operator && node->left->token.value == "*") {
                 ASTNode* innerMul = node->left;
                 if (innerMul->left && innerMul->left->token.type == TokenType::Number &&
                     innerMul->right && innerMul->right->token.type == TokenType::Operator && innerMul->right->token.value == "^" &&
-                    innerMul->right->right && innerMul->right->right->token.value == "2") 
-                {
+                    innerMul->right->right && innerMul->right->right->token.value == "2") {
                     double A = std::stod(innerMul->left->token.value);
                     ASTNode* funcNode = innerMul->right->left;
                     if (A >= 0) {
                         ASTNode* res = new ASTNode({TokenType::Operator, "*", MathFunc::None});
                         res->left = new ASTNode({TokenType::Number, formatDouble(sqrt(A)), MathFunc::None});
-                        res->right = copyTree(funcNode); deleteTree(node); return res;
+                        res->right = copyTree(funcNode); deleteTree(node); depth_counter--; return res;
                     }
                 }
             }
         }
-
         if (node->left && node->left->token.type == TokenType::Operator && node->left->token.value == "*") {
             ASTNode* innerMul = node->left;
             if (innerMul->left && innerMul->left->token.type == TokenType::Number && node->right && node->right->token.type == TokenType::Number) {
-                double base_c = std::stod(innerMul->left->token.value);
-                double power = std::stod(node->right->token.value);
-                double new_c = std::pow(base_c, power);
-
+                double base_c = std::stod(innerMul->left->token.value); double power = std::stod(node->right->token.value);
                 ASTNode* newMul = new ASTNode({TokenType::Operator, "*", MathFunc::None});
-                newMul->left = new ASTNode({TokenType::Number, formatDouble(new_c), MathFunc::None});
+                newMul->left = new ASTNode({TokenType::Number, formatDouble(std::pow(base_c, power)), MathFunc::None});
                 ASTNode* newPow = new ASTNode({TokenType::Operator, "^", MathFunc::None});
                 newPow->left = copyTree(innerMul->right); newPow->right = copyTree(node->right);
-                newMul->right = newPow; deleteTree(node); return newMul;
+                newMul->right = newPow; deleteTree(node); depth_counter--; return newMul;
             }
         }
     }
-
-    return node;
+    depth_counter--; return node;
 }

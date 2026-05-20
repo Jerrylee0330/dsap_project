@@ -55,7 +55,7 @@ double evaluatePostfix(const vector<Token>& postfix)
 
 string formatDouble(double val)
 {
-    ostringstream out;
-    out << val;
+    std::ostringstream out;
+    out << std::setprecision(15) << std::noshowpoint << val;
     return out.str();
 }
