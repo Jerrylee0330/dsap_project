@@ -1,10 +1,11 @@
 #include "parser.hpp"
-#include "utils.hpp"
-
+#include <cmath>
+#include <sstream>
+#include <iomanip>
 bool needsImplicitMultiplication(TokenType prevType)
 {
-    return (prevType == TokenType::Number || 
-            prevType == TokenType::Variable || 
+    return (prevType == TokenType::Number ||
+            prevType == TokenType::Variable ||
             prevType == TokenType::Constant ||
             prevType == TokenType::RightParen);
 }
@@ -12,215 +13,193 @@ bool needsImplicitMultiplication(TokenType prevType)
 // =======================================================
 // 🌟 Token 預處理器 (完美適配 TokenType::LeftParen 版)
 // =======================================================
-vector<Token> preprocessTokens(const vector<Token>& tokens) {
-    vector<Token> result;
 
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        Token current = tokens[i];
-        result.push_back(current);
-
-        // 如果已經是最後一個 Token，就不需要往後看
-        if (i == tokens.size() - 1) break;
-
-        Token next = tokens[i + 1];
-        bool needsMultiply = false;
-
-        // ==========================================
-        // 🌟 檢查是否需要補上隱含乘法 "*"
-        // ==========================================
-        // 情況 A：數字後面接變數、函數、或「左括號」 (例如 "2x", "2sin", "2(")
-        if (current.type == TokenType::Number && 
-           (next.type == TokenType::Variable || next.type == TokenType::Function || next.type == TokenType::LeftParen)) {
-            needsMultiply = true;
-        }
-        // 情況 B：「右括號」後面接「左括號」、變數、或函數 (例如 "(x+1)(x-1)", "(x)sin(x)")
-        else if (current.type == TokenType::RightParen && 
-                (next.type == TokenType::LeftParen || next.type == TokenType::Variable || next.type == TokenType::Function)) {
-            needsMultiply = true;
-        }
-        // 情況 C：變數後面接變數、函數、或「左括號」 (例如 "x sin(x)", "x(x+1)")
-        else if (current.type == TokenType::Variable && 
-                (next.type == TokenType::Variable || next.type == TokenType::Function || next.type == TokenType::LeftParen)) {
-            needsMultiply = true;
-        }
-
-        // 補上純正的乘法 Token
-        if (needsMultiply) {
-            result.push_back({TokenType::Operator, "*"});
-        }
-
-        // ==========================================
-        // 🌟 處理偷懶的「函數隱含括號」(例如 sin x -> sin(x))
-        // ==========================================
-        // 如果現在是函數，但下一個 Token 不是「左括號」
-        if (current.type == TokenType::Function && next.type != TokenType::LeftParen) {
-            
-            // 直接使用你設計的專屬 Token 類型來生成括號！
-            result.push_back({TokenType::LeftParen, "("});
-            result.push_back(next);
-            result.push_back({TokenType::RightParen, ")"});
-            
-            i++; // 跳過下一個 Token，因為我們已經把它包進括號裡了
-        }
-    }
-
-    return result;
-}
-
-vector<Token> tokenize(const string& input)
+vector<Token> tokenize(const string &input)
 {
     vector<Token> tokens;
 
-    for(int i = 0; i < input.length(); i++)
+    for (int i = 0; i < input.length(); i++)
     {
         char c = input[i];
-        if(c == ' ') continue;
-        if(c == '+') tokens.push_back({TokenType::Operator, "+"});
-        if(c == '-') tokens.push_back({TokenType::Operator, "-"});
-        if(c == '*') tokens.push_back({TokenType::Operator, "*"});
-        if(c == '/') tokens.push_back({TokenType::Operator, "/"});
-        if(c == '^') tokens.push_back({TokenType::Operator, "^"});
-        if(c == '(') tokens.push_back({TokenType::LeftParen, "("});
-        if(c == ')') tokens.push_back({TokenType::RightParen, ")"});
-        
-        if(isalpha(c))
+        if (c == ' ')
+            continue;
+        if (c == '+')
+            tokens.push_back({TokenType::Operator, "+"});
+        if (c == '-')
+            tokens.push_back({TokenType::Operator, "-"});
+        if (c == '*')
+            tokens.push_back({TokenType::Operator, "*"});
+        if (c == '/')
+            tokens.push_back({TokenType::Operator, "/"});
+        if (c == '^')
+            tokens.push_back({TokenType::Operator, "^"});
+        if (c == '(')
+            tokens.push_back({TokenType::LeftParen, "("});
+        if (c == ')')
+            tokens.push_back({TokenType::RightParen, ")"});
+
+        if (isalpha(c))
         {
             string name = "";
-            
+
             // 1. 貪婪讀取：把連續的英文字母全部吃進來組成單字
-            while (i < input.length() && isalpha(input[i])) {
+            while (i < input.length() && isalpha(input[i]))
+            {
                 name += input[i];
                 i++;
             }
             i--; // 退回一格，抵銷外層 for 迴圈即將執行的 i++
 
-            if (!tokens.empty() && needsImplicitMultiplication(tokens.back().type)) {
+            if (!tokens.empty() && needsImplicitMultiplication(tokens.back().type))
+            {
                 tokens.push_back({TokenType::Operator, "*", MathFunc::None});
             }
 
             // 3. 建立靜態hash table
             static const std::unordered_map<string, MathFunc> funcMap = {
-                {"sin", MathFunc::sin}, {"cos", MathFunc::cos}, {"tan", MathFunc::tan},
-                {"cot", MathFunc::cot}, {"sec", MathFunc::sec}, {"csc", MathFunc::csc},
-                {"ln",  MathFunc::ln},  {"log",  MathFunc::log},
-                {"arcsin",  MathFunc::arcsin}, {"arccos",  MathFunc::arccos},
-                {"arctan",  MathFunc::arctan}, {"arccot",  MathFunc::arccot},
-                {"arcsec",  MathFunc::arcsec}, {"arccsc",  MathFunc::arccsc},
-                {"abs",  MathFunc::abs},
+                {"sin", MathFunc::sin},
+                {"cos", MathFunc::cos},
+                {"tan", MathFunc::tan},
+                {"cot", MathFunc::cot},
+                {"sec", MathFunc::sec},
+                {"csc", MathFunc::csc},
+                {"ln", MathFunc::ln},
+                {"log", MathFunc::log},
+                {"arcsin", MathFunc::arcsin},
+                {"arccos", MathFunc::arccos},
+                {"arctan", MathFunc::arctan},
+                {"arccot", MathFunc::arccot},
+                {"arcsec", MathFunc::arcsec},
+                {"arccsc", MathFunc::arccsc},
+                {"abs", MathFunc::abs},
             };
 
             // 雖然我們暫時不用到 double，但保留這個 map 以後要做 evaluate() 數值計算時非常方便！
             static const std::unordered_map<string, double> constMap = {
                 {"pi", 3.14159265358979323846},
-                {"e",  2.71828182845904523536}
-            };
+                {"e", 2.71828182845904523536}};
 
             // 4. 字典查表 (O(1) 極速尋找)
             auto itFunc = funcMap.find(name);
-            if (itFunc != funcMap.end()) {
+            if (itFunc != funcMap.end())
+            {
                 // 命中函數字典！(例如 sin)
                 tokens.push_back({TokenType::Function, name, itFunc->second});
-            } 
-            else {
+            }
+            else
+            {
                 // 如果不是函數，再查查看是不是常數？
                 auto itConst = constMap.find(name);
-                if (itConst != constMap.end()) {
+                if (itConst != constMap.end())
+                {
                     // ==========================================
                     // 🌟 核心修正點：命中常數字典！
                     // 不要再把它轉換成小數了，直接賦予 Constant 身分，並保留原本的字母 (name)！
                     // ==========================================
                     tokens.push_back({TokenType::Constant, name, MathFunc::None});
-                } 
-                else {
+                }
+                else
+                {
                     // 都不是！那它就是個普通的變數 (例如 x, y)
                     tokens.push_back({TokenType::Variable, name, MathFunc::None});
                 }
             }
         }
-        
-        if(isdigit(c))
+
+        if (isdigit(c))
         {
             string numStr = "";
-            while(i < input.length() && (isdigit(input[i]) || input[i] == '.')) 
+            while (i < input.length() && (isdigit(input[i]) || input[i] == '.'))
             {
                 numStr += input[i];
                 i++;
             }
 
             tokens.push_back({TokenType::Number, numStr});
-            i--; 
+            i--;
         }
     }
-    
+
     return tokens;
 }
 
 int getPrecedence(string op)
 {
-    if(op == "+" || op == "-") return 1;
-    if(op == "*" || op == "/") return 2;
-    if(op == "^") return 3;
-    else return 100;
+    if (op == "+" || op == "-")
+        return 1;
+    if (op == "*" || op == "/")
+        return 2;
+    if (op == "^")
+        return 3;
+    else
+        return 100;
 }
 
-vector<Token> infixToPostfix(const vector<Token>& tokens)
+vector<Token> infixToPostfix(const vector<Token> &tokens)
 {
-    vector<Token> output; //這個是預計要回傳的後序表達式
+    vector<Token> output; // 這個是預計要回傳的後序表達式
     stack<Token> opStack;
-    for(int i = 0; i < tokens.size(); i++)
+    for (int i = 0; i < tokens.size(); i++)
     {
         Token t = tokens[i];
-        
+
         // 1. 數字和變數直接輸出
-        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant) {
+        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant)
+        {
             output.push_back(t);
         }
 
         //  2. 遇到函數，跟左括號一樣先推入 Stack 等待
-        else if (t.type == TokenType::Function) {
+        else if (t.type == TokenType::Function)
+        {
             opStack.push(t);
         }
 
         // 3. 處理運算子
-        else if (t.type == TokenType::Operator) {
+        else if (t.type == TokenType::Operator)
+        {
             while (!opStack.empty())
             {
                 Token topOp = opStack.top();
-                if (topOp.type == TokenType::Operator && getPrecedence(t.value) <= getPrecedence(topOp.value)) 
+                if (topOp.type == TokenType::Operator && getPrecedence(t.value) <= getPrecedence(topOp.value))
                 {
                     output.push_back(topOp);
-                    opStack.pop();          
-                } 
-                else break;
+                    opStack.pop();
+                }
+                else
+                    break;
             }
             opStack.push(t);
         }
 
         // 4. 左括號
-        else if (t.type == TokenType::LeftParen) 
+        else if (t.type == TokenType::LeftParen)
         {
             opStack.push(t);
         }
 
         // 5. 右括號
-        else if (t.type == TokenType::RightParen) 
+        else if (t.type == TokenType::RightParen)
         {
-            while (!opStack.empty() && opStack.top().type != TokenType::LeftParen) {
+            while (!opStack.empty() && opStack.top().type != TokenType::LeftParen)
+            {
                 output.push_back(opStack.top());
                 opStack.pop();
             }
 
-            if (!opStack.empty() && opStack.top().type == TokenType::LeftParen) {
-                opStack.pop(); 
+            if (!opStack.empty() && opStack.top().type == TokenType::LeftParen)
+            {
+                opStack.pop();
             }
             //  關鍵新增：括號處理完後，如果前面包著函數 (例如 sin)，也把它彈到 output
-            if (!opStack.empty() && opStack.top().type == TokenType::Function) {
+            if (!opStack.empty() && opStack.top().type == TokenType::Function)
+            {
                 output.push_back(opStack.top());
                 opStack.pop();
             }
         }
     }
-    while (!opStack.empty()) 
+    while (!opStack.empty())
     {
         output.push_back(opStack.top());
         opStack.pop();
@@ -228,42 +207,42 @@ vector<Token> infixToPostfix(const vector<Token>& tokens)
     return output;
 }
 
-ASTNode* buildAST(const vector<Token>& postfix)
+ASTNode *buildAST(const vector<Token> &postfix)
 {
-    stack<ASTNode*> st;
+    stack<ASTNode *> st;
 
-    for (int i = 0; i < postfix.size(); i++) 
+    for (int i = 0; i < postfix.size(); i++)
     {
         Token t = postfix[i];
 
-        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant) 
+        if (t.type == TokenType::Number || t.type == TokenType::Variable || t.type == TokenType::Constant)
         {
-            ASTNode* new_AST= new ASTNode(t);
+            ASTNode *new_AST = new ASTNode(t);
             st.push(new_AST);
-        } 
+        }
 
         else if (t.type == TokenType::Function)
         {
-            ASTNode* funcNode = new ASTNode(t);
-            
+            ASTNode *funcNode = new ASTNode(t);
+
             // 函數只有一個小孩 (例如 sin 裡面的 x)，把它掛在右邊
-            ASTNode* child = st.top();
+            ASTNode *child = st.top();
             st.pop();
-            
+
             funcNode->right = child;
             funcNode->left = nullptr; // 左邊留空
 
             st.push(funcNode);
         }
 
-        else if (t.type == TokenType::Operator) 
+        else if (t.type == TokenType::Operator)
         {
-            ASTNode* op_Node = new ASTNode(t);
+            ASTNode *op_Node = new ASTNode(t);
 
-            ASTNode* rightchild = st.top();
+            ASTNode *rightchild = st.top();
             st.pop();
 
-            ASTNode* leftchild = st.top();
+            ASTNode *leftchild = st.top();
             st.pop();
 
             op_Node->left = leftchild;
@@ -272,162 +251,221 @@ ASTNode* buildAST(const vector<Token>& postfix)
             st.push(op_Node);
         }
     }
-    
+
     // 迴圈結束後，Stack 剩下的唯一一個元素就是整棵樹的 Root
-    return st.top(); 
+    return st.top();
 }
 
-string treeToString(ASTNode* node) {
-    if (node == nullptr) return "";
+std::string doubleToFraction(double val, double tol = 1e-5)
+{
+    if (std::abs(val) < tol)
+        return "0";
 
-    // 情況 A：如果是數字或變數，直接回傳
-    if (node->token.type == TokenType::Number || node->token.type == TokenType::Variable || node->token.type == TokenType::Constant) {
+    // 如果本來就是整數，直接回傳
+    if (std::abs(val - std::round(val)) < tol)
+    {
+        return std::to_string((int)std::round(val));
+    }
+
+    int sign = (val < 0) ? -1 : 1;
+    val = std::abs(val);
+
+    // 暴力尋找分母 (最大分母設為 10000，微積分的題目絕對夠用)
+    for (int d = 1; d <= 10000; ++d)
+    {
+        double num = val * d;
+        // 如果乘上分母後非常接近整數，代表我們找到分數了！
+        if (std::abs(num - std::round(num)) < tol)
+        {
+            int n = (int)std::round(num);
+            return (sign < 0 ? "-" : "") + std::to_string(n) + "/" + std::to_string(d);
+        }
+    }
+
+    // 🛡️ 兜底機制：如果真的找不到漂亮的分數 (例如無理數)，就印出乾淨的小數
+    std::string res = std::to_string(val * sign);
+    res.erase(res.find_last_not_of('0') + 1, std::string::npos); // 砍掉尾巴多餘的 0
+    if (res.back() == '.')
+        res.pop_back(); // 如果砍完 0 剩下小數點，也砍掉
+    return res;
+}
+
+string treeToString(ASTNode *node)
+{
+    if (node == nullptr)
+        return "";
+
+    // ==========================================
+    // 情況 A：處理變數與常數
+    // ==========================================
+    if (node->token.type == TokenType::Variable || node->token.type == TokenType::Constant)
+    {
         return node->token.value;
     }
 
-    // 情況 B：如果是函數 (例如 sin, ln)，強制加上括號包住後面的東西
-    if (node->token.type == TokenType::Function) {
-        if (node->token.value == "abs") {
-            return "|" + treeToString(node->right) + "|"; // 單直線包夾
-        }
+    // 處理數字 (小數轉分數)
+    if (node->token.type == TokenType::Number)
+    {
+        return doubleToFraction(std::stod(node->token.value));
+    }
+
+    // ==========================================
+    // 情況 B：函數處理
+    // ==========================================
+    if (node->token.type == TokenType::Function)
+    {
+        if (node->token.value == "abs")
+            return "|" + treeToString(node->right) + "|";
         return node->token.value + "(" + treeToString(node->right) + ")";
     }
 
-    // 情況 C：如果是運算符號 (+, -, *, /)
-    if (node->token.type == TokenType::Operator) {
-        // 🌟 1. 終極化簡攔截： 0.5 * u^-0.5  ➔  1 / (2 * √(u))
-        if (node->token.value == "*") {
-            // 條件 A：左邊是數字 0.5
-            bool leftIsHalf = (node->left && node->left->token.type == TokenType::Number && node->left->token.value == "0.5");
-            
-            // 條件 B：右邊是 ^ -0.5
-            bool rightIsNegHalfPower = (node->right && node->right->token.value == "^" && 
-                                        node->right->right && node->right->right->token.type == TokenType::Number && 
-                                        node->right->right->token.value == "-0.5");
+    // ==========================================
+    // 情況 C：運算子處理
+    // ==========================================
+    if (node->token.type == TokenType::Operator)
+    {
+        string op = node->token.value;
 
-            if (leftIsHalf && rightIsNegHalfPower) {
-                // 完美捕捉！將底數 (也就是右邊節點的左子樹) 抓出來
-                string baseStr = treeToString(node->right->left);
-                // 直接回傳教科書等級的排版！
-                return "1 / (2 * √(" + baseStr + "))"; 
+        // 🌟 根號攔截邏輯：把 A^0.5 轉換成比較好看的 sqrt(A)
+        if (op == "^" && node->right && node->right->token.type == TokenType::Number)
+        {
+            double p = std::stod(node->right->token.value);
+            if (std::abs(p - 0.5) < 1e-9)
+            {
+                return "sqrt(" + treeToString(node->left) + ")";
             }
         }
 
-        // 🌟 2. 保留原本的次方攔截 (以防它單獨出現，沒有被乘以 0.5)
-        if (node->token.value == "^") {
-            if (node->right && node->right->token.type == TokenType::Number) {
-                // 攔截正根號： x ^ 0.5  ➔  √(x)
-                if (node->right->token.value == "0.5") {
-                    return "√(" + treeToString(node->left) + ")";
-                }
-                // 攔截負根號： x ^ -0.5  ➔  (1 / √(x))
-                if (node->right->token.value == "-0.5") {
-                    return "(1 / √(" + treeToString(node->left) + "))"; 
-                }
-            }
-        }
-
-        string leftStr = treeToString(node->left);
-        string rightStr = treeToString(node->right);
-
-        // 🌟 檢查左子節點
-        if (node->left && node->left->token.type == TokenType::Operator) {
-            // 左邊加括號：左邊優先級較低，或者是「父節點是乘法，左邊是除法」
-            if (getPrecedence(node->left->token.value) < getPrecedence(node->token.value) || 
-               (node->token.value == "*" && node->left->token.value == "/")) {
-                leftStr = "(" + leftStr + ")";
-            }
-        }
-
-        // 🌟 檢查右子節點
-        if (node->right && node->right->token.type == TokenType::Operator) {
-            // 右邊加括號：右邊優先級較低，或者是同級的減法/除法，或者是「父節點是乘法，右邊是除法」
-            if (getPrecedence(node->right->token.value) < getPrecedence(node->token.value) || 
-               (node->token.value == "-" || node->token.value == "/") ||
-               (node->token.value == "*" && node->right->token.value == "/")) {
-                rightStr = "(" + rightStr + ")";
-            }
-        }
-
-        if (node->token.value == "*") {
+        // 🌟 乘法優化邏輯 (總司令的改進版)
+        if (op == "*")
+        {
             double coeff = 1.0;
             vector<string> vars;
             vector<string> funcs;
 
-            // 定義一個遞迴收集器 (Lambda 函數)
-            function<void(ASTNode*)> collectFactors = [&](ASTNode* n) {
-                if (!n) return;
-                
-                // 1. 遇到數字：全部乘進 coeff (自動解決 -1 * ... * 2 變成 -2)
-                if (n->token.type == TokenType::Number) {
+            std::function<void(ASTNode *)> collectFactors = [&](ASTNode *n)
+            {
+                if (!n)
+                    return;
+                if (n->token.type == TokenType::Number)
+                {
                     coeff *= stod(n->token.value);
                     return;
                 }
-                // 2. 遇到變數：收集到 vars 陣列
-                if (n->token.type == TokenType::Variable) {
+                if (n->token.type == TokenType::Variable)
+                {
                     vars.push_back(n->token.value);
                     return;
                 }
-                // 3. 遇到連續的乘法：繼續往下扒開
-                if (n->token.type == TokenType::Operator && n->token.value == "*") {
+                if (n->token.type == TokenType::Operator && n->token.value == "*")
+                {
                     collectFactors(n->left);
                     collectFactors(n->right);
                     return;
                 }
-                
-                // 4. 遇到其他複雜結構 (+, -, /, ^, sin等)：轉成字串當作一個獨立群組
                 string termStr = treeToString(n);
-                
-                // 防禦性括號：如果這是一個加減除法群組，因為它原本在乘法底下，必須強制加括號
-                if (n->token.type == TokenType::Operator && 
-                   (n->token.value == "+" || n->token.value == "-" || n->token.value == "/")) {
+                // 遇到加減除法被包在乘法裡，強制加括號
+                if (n->token.type == TokenType::Operator && (n->token.value == "+" || n->token.value == "-" || n->token.value == "/"))
+                {
                     termStr = "(" + termStr + ")";
                 }
                 funcs.push_back(termStr);
             };
 
-            // 啟動收集魔法！
             collectFactors(node);
-
-            // 如果整個乘法串中有任何 0，直接霸氣回傳 0
-            if (coeff == 0) return "0";
+            if (abs(coeff) < 1e-9)
+                return "0";
 
             string result = "";
             bool hasOtherTerms = !vars.empty() || !funcs.empty();
 
-            // 🌟 開始組裝完美的數學式： [常數] [變數] [函數]
-
-            // 步驟一：組合數字 (如果是 1 或 -1 且後面還有東西，省略 1 的顯示)
-            if (coeff == -1 && hasOtherTerms) {
+            // 處理常數係數
+            if (abs(coeff - 1.0) < 1e-9 && hasOtherTerms)
+            { /* 係數為 1 且有其他東西，省略不印 */
+            }
+            else if (abs(coeff + 1.0) < 1e-9 && hasOtherTerms)
+            {
                 result += "-";
-            } else if (coeff != 1 || !hasOtherTerms) {
-                // 這裡使用你在 derivative 寫過的 formatDouble 來去除多餘的 0
-                result += formatDouble(coeff); 
+            }
+            else
+            {
+                result += doubleToFraction(coeff);
+                if (hasOtherTerms)
+                    result += " * ";
             }
 
-            // 步驟二：組合變數 (例如 x 放在數字後面變成 -2x)
-            for (const string& v : vars) {
+            // 處理變數與函數
+            for (const string &v : vars)
                 result += v;
-            }
-
-            // 步驟三：組合函數與括號群組 (例如 cos(x))
-           for (size_t i = 0; i < funcs.size(); ++i) {
-                if (i > 0) {
-                    // ✨ 你的神來一筆：函數與函數之間，加上乘號！
-                    result += " * "; 
-                } else if (!result.empty()) {
-                    // 常數/變數與「第一個」函數之間 (例如 -2x 與 cos)
-                    // 保留半形空白就好，這樣會印出 -2x cos(...)
-                    result += " "; 
-                }
+            for (size_t i = 0; i < funcs.size(); ++i)
+            {
+                if (i > 0 || !vars.empty())
+                    result += " * ";
                 result += funcs[i];
             }
-
             return result;
         }
 
-        return leftStr + " " + node->token.value + " " + rightStr;
+        // 🌟 其他運算子 ( +, -, /, ^ ) 的括號優先級邏輯
+        string leftStr = treeToString(node->left);
+        string rightStr = treeToString(node->right);
+
+        // 處理單目運算符 (例如最前面的負號 -x)
+        if (node->left == nullptr)
+        {
+            if (node->right && node->right->token.type == TokenType::Operator)
+            {
+                return op + "(" + rightStr + ")";
+            }
+            return op + rightStr;
+        }
+
+        // 優先級判斷小幫手：數字越大優先級越高
+        auto getPrec = [](const string &o)
+        {
+            if (o == "+" || o == "-")
+                return 1;
+            if (o == "/" || o == "*")
+                return 2;
+            if (o == "^")
+                return 3;
+            return 4;
+        };
+
+        int myPrec = getPrec(op);
+
+        // 左邊需不需要括號？(如果左邊的運算子優先級「小於」自己，就要包起來)
+        // 例如： (A + B) ^ C  ->  ^ 是 3，+ 是 1，所以左邊要包
+        bool wrapLeft = false;
+        if (node->left && node->left->token.type == TokenType::Operator)
+        {
+            if (getPrec(node->left->token.value) < myPrec)
+                wrapLeft = true;
+        }
+
+        // 右邊需不需要括號？(如果右邊優先級「小於等於」自己，通常要包起來確保安全)
+        // 例如： A - (B + C)  或  A / (B * C)  或  A ^ (B ^ C)
+        bool wrapRight = false;
+        if (node->right && node->right->token.type == TokenType::Operator)
+        {
+            if (getPrec(node->right->token.value) <= myPrec)
+                wrapRight = true;
+        }
+
+        if (wrapLeft)
+            leftStr = "(" + leftStr + ")";
+        if (wrapRight)
+            rightStr = "(" + rightStr + ")";
+
+        return leftStr + " " + op + " " + rightStr;
     }
 
     return "";
+}
+
+string formatDouble(double val)
+{
+    std::ostringstream out;
+    out << std::setprecision(15) << std::noshowpoint << val;
+    return out.str();
 }
